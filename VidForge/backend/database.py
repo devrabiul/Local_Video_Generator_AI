@@ -31,19 +31,36 @@ def init_db():
                 error_message TEXT DEFAULT '',
                 output_video TEXT DEFAULT '',
                 thumbnail TEXT DEFAULT '',
+                video_type TEXT DEFAULT 'story',
+                target_duration INTEGER DEFAULT 60,
+                motion_mode TEXT DEFAULT 'kenburns',
+                music_theme TEXT DEFAULT 'cinematic_epic',
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             )
         """)
+        # Safe migration for existing databases
+        for col, col_type in [
+            ("video_type", "TEXT DEFAULT 'story'"),
+            ("target_duration", "INTEGER DEFAULT 60"),
+            ("motion_mode", "TEXT DEFAULT 'kenburns'"),
+            ("music_theme", "TEXT DEFAULT 'cinematic_epic'")
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
 
-def add_job(job_id: str, title: str, story_prompt: str, language: str, voice: str, aspect_ratio: str, scenes_json: str = "[]"):
+def add_job(job_id: str, title: str, story_prompt: str, language: str, voice: str, aspect_ratio: str, 
+            scenes_json: str = "[]", video_type: str = "story", target_duration: int = 60, 
+            motion_mode: str = "kenburns", music_theme: str = "cinematic_epic"):
     now = time.time()
     with get_connection() as conn:
         conn.execute("""
-            INSERT INTO jobs (id, title, story_prompt, language, voice, aspect_ratio, status, progress, current_step, scenes_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', 0, 'Waiting in queue', ?, ?, ?)
-        """, (job_id, title, story_prompt, language, voice, aspect_ratio, scenes_json, now, now))
+            INSERT INTO jobs (id, title, story_prompt, language, voice, aspect_ratio, status, progress, current_step, scenes_json, video_type, target_duration, motion_mode, music_theme, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', 0, 'Waiting in queue', ?, ?, ?, ?, ?, ?, ?)
+        """, (job_id, title, story_prompt, language, voice, aspect_ratio, scenes_json, video_type, target_duration, motion_mode, music_theme, now, now))
         conn.commit()
 
 def get_next_queued_job():

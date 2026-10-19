@@ -21,24 +21,34 @@ async def process_job(job: dict):
     logger.info(f"Starting job {job_id} | Language: {job['language']} | Aspect: {job['aspect_ratio']}")
 
     try:
+        video_type = job.get("video_type") or "story"
+        target_duration = int(job.get("target_duration") or 60)
+        motion_mode = job.get("motion_mode") or "kenburns"
+        music_theme = job.get("music_theme") or "cinematic_epic"
+
         # Step 1: Script & Scene Planning
         scenes = []
         if job.get("scenes_json") and job["scenes_json"] != "[]":
             try:
                 scenes = json.loads(job["scenes_json"])
-                logger.info(f"Using {len(scenes)} pre-planned scenes from Ollama Story Studio")
+                logger.info(f"Using {len(scenes)} pre-planned scenes from Story Studio")
             except Exception:
                 scenes = []
 
         if not scenes:
-            update_job_status(job_id, status="SCRIPTING", progress=10, current_step="Generating narrative scenes with Ollama...")
-            plan = await ai_engine.plan_story(job["story_prompt"], job["language"])
+            update_job_status(job_id, status="SCRIPTING", progress=10, current_step=f"Generating {video_type.title()} script (~{target_duration}s)...")
+            plan = await ai_engine.plan_script(
+                prompt=job["story_prompt"],
+                language=job["language"],
+                video_type=video_type,
+                target_duration=target_duration
+            )
             scenes = plan.get("scenes", [])
-            title = plan.get("title", job.get("title") or "Untitled Story")
+            title = plan.get("title", job.get("title") or "Untitled Production")
             if not scenes:
-                raise ValueError("Ollama failed to generate scenes")
+                raise ValueError(f"Ollama failed to generate {video_type} scenes")
         else:
-            title = job.get("title") or "Untitled Story"
+            title = job.get("title") or "Untitled Production"
 
         update_job_status(job_id, status="SCRIPTING", progress=25, current_step=f"Ready with {len(scenes)} scenes: {title}", scenes_json=json.dumps(scenes, ensure_ascii=False))
 
@@ -68,22 +78,37 @@ async def process_job(job: dict):
             sc["image"] = str(img_path)
             scene_images.append(img_path)
 
-        # Step 4: Character & Scene Animation with Wan 2.1 I2V
-        update_job_status(job_id, status="ANIMATING_VIDEO", progress=72, current_step="Animating characters & scenes with Wan 2.1 I2V...")
+        # Step 4: Camera Motion & Transitions (Ultra HD Ken Burns or Wan 2.1)
+        motion_label = "Ultra HD Ken Burns" if motion_mode == "kenburns" else ("Wan 2.1 AI Motion" if motion_mode == "wan" else "Clean Presentation")
+        update_job_status(job_id, status="ANIMATING_VIDEO", progress=72, current_step=f"Composing {motion_label} and transitions...")
         scene_videos = []
         for i, (img_path, dur, sc) in enumerate(zip(scene_images, scene_durations, scenes)):
             vid_path = work_dir / f"scene_{i+1}.mp4"
-            motion_desc = sc.get("motion_prompt", "character moving and breathing naturally, cinematic camera motion")
-            update_job_status(job_id, status="ANIMATING_VIDEO", progress=72 + int((i / len(scenes)) * 20), current_step=f"Animating character motion for scene {i+1}/{len(scenes)}...")
-            await ai_engine.animate_scene(img_path, motion_desc, dur, job["aspect_ratio"], vid_path, fallback_idx=i)
+            motion_desc = sc.get("motion_prompt", "cinematic camera movement")
+            update_job_status(job_id, status="ANIMATING_VIDEO", progress=72 + int((i / len(scenes)) * 20), current_step=f"Composing camera motion for scene {i+1}/{len(scenes)}...")
+            await ai_engine.animate_scene(
+                image_path=img_path,
+                motion_prompt=motion_desc,
+                duration=dur,
+                aspect=job["aspect_ratio"],
+                output_path=vid_path,
+                fallback_idx=i,
+                motion_mode=motion_mode
+            )
             scene_videos.append(vid_path)
 
         # Step 5: Final Composition & Cinematic Soundtrack Mix
-        update_job_status(job_id, status="COMPOSING", progress=94, current_step="Mixing cinematic music track with audio ducking...")
+        update_job_status(job_id, status="COMPOSING", progress=94, current_step=f"Mixing soundtrack ({music_theme}) with audio ducking...")
         final_mp4 = OUTPUT_DIR / f"{job_id}.mp4"
         thumbnail = OUTPUT_DIR / f"{job_id}_thumb.png"
 
-        ai_engine.assemble_final_video(scene_videos, scene_audios, final_mp4, job["aspect_ratio"], music_theme="cinematic_epic")
+        ai_engine.assemble_final_video(
+            scene_videos=scene_videos,
+            scene_audios=scene_audios,
+            output_path=final_mp4,
+            aspect=job["aspect_ratio"],
+            music_theme=music_theme
+        )
         if scene_images:
             shutil.copy(scene_images[0], thumbnail)
 

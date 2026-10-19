@@ -30,6 +30,10 @@ interface Job {
   error_message?: string;
   output_video?: string;
   thumbnail?: string;
+  video_type?: string;
+  target_duration?: number;
+  motion_mode?: string;
+  music_theme?: string;
   created_at: number;
 }
 
@@ -59,33 +63,104 @@ const F5_VOICE_LIST = [
   { id: "en_nature", name: "Nature & Earth", desc: "English Deep Cinematic Male (Local RTX 5070 Ti Clone)", lang: "en" }
 ];
 
-const QUICK_INSPIRATIONS = [
-  {
-    title: "পলাশীর যুদ্ধ (১৭৫৭)",
-    lang: "bn",
-    prompt: "১৭৫৭ সালের ২৩ জুন পলাশীর আমবাগানে নবাব সিরাজউদ্দৌলা এবং লর্ড ক্লাইভের কোম্পানির যুদ্ধ। মীর জাফরের চরম বিশ্বাসঘাতকতা, বৃষ্টিতে বারুদ নষ্ট হওয়া এবং বাংলার স্বাধীনতার সূর্য অস্তমিত হওয়ার মহাকাব্যিক গল্প।"
-  },
-  {
-    title: "সুলতান মুহাম্মদ ফাতিহ (১৪৫৩)",
-    lang: "bn",
-    prompt: "১৪৫৩ সালের এপ্রিল মাস। মাত্র ২১ বছর বয়সী অটোমান সুলতান দ্বিতীয় মুহাম্মদ অপরাজেয় কনস্টান্টিনোপল প্রাচীরের সামনে আসেন। তিনি ডাঙার উপর দিয়ে যুদ্ধজাহাজ টেনে নিয়ে যান এবং দানবীয় কামান দাগেন।"
-  },
-  {
-    title: "তিতুমীরের বাঁশের কেল্লা (১৮৩১)",
-    lang: "bn",
-    prompt: "১৮৩১ সালে নারিকেলবাড়িয়ায় সৈয়দ মীর নিসার আলী তিতুমীরের ব্রিটিশ ও নীলকরদের বিরুদ্ধে বাঁশের কেল্লা তৈরি করে প্রতিরোধ ও বীরত্বপূর্ণ লড়াই।"
-  },
-  {
-    title: "পানিপথের প্রথম যুদ্ধ (১৫২৬)",
-    lang: "hi",
-    prompt: "1526 में बाबर और इब्राहिम लोदी के बीच पानीपत का ऐतिहासिक महायुद्ध। पहली बार बारूद और तोपों का विध्वंसक प्रयोग और मुग़ल साम्राज्य की नींव।"
-  },
-  {
-    title: "Teutoburg Forest Ambush",
-    lang: "en",
-    prompt: "9 AD Teutoburg Forest: Three elite Roman legions march into an ancient misty Germanic forest, where an epic ambush changes the course of European history forever."
-  }
-];
+const FORMAT_INSPIRATIONS: Record<string, Array<{ title: string; lang: string; prompt: string; duration: number }>> = {
+  story: [
+    {
+      title: "পলাশীর যুদ্ধ (১৭৫৭)",
+      lang: "bn",
+      duration: 120,
+      prompt: "১৭৫৭ সালের ২৩ জুন পলাশীর আমবাগানে নবাব সিরাজউদ্দৌলা এবং লর্ড ক্লাইভের কোম্পানির যুদ্ধ। মীর জাফরের চরম বিশ্বাসঘাতকতা, বৃষ্টিতে বারুদ নষ্ট হওয়া এবং বাংলার স্বাধীনতার সূর্য অস্তমিত হওয়ার মহাকাব্যিক গল্প।"
+    },
+    {
+      title: "সুলতান মুহাম্মদ ফাতিহ (১৪৫৩)",
+      lang: "bn",
+      duration: 120,
+      prompt: "১৪৫৩ সালের এপ্রিল মাস। মাত্র ২১ বছর বয়সী অটোমান সুলতান দ্বিতীয় মুহাম্মদ অপরাজেয় কনস্টান্টিনোপল প্রাচীরের সামনে আসেন। তিনি ডাঙার উপর দিয়ে যুদ্ধজাহাজ টেনে নিয়ে যান এবং দানবীয় কামান দাগেন।"
+    },
+    {
+      title: "তিতুমীরের বাঁশের কেল্লা (১৮৩১)",
+      lang: "bn",
+      duration: 90,
+      prompt: "১৮৩১ সালে নারিকেলবাড়িয়ায় সৈয়দ মীর নিসার আলী তিতুমীরের ব্রিটিশ ও নীলকরদের বিরুদ্ধে বাঁশের কেল্লা তৈরি করে প্রতিরোধ ও বীরত্বপূর্ণ লড়াই।"
+    }
+  ],
+  news: [
+    {
+      title: "কৃত্রিম বুদ্ধিমত্তা বিপ্লব ও ভবিষ্যৎ অর্থনীতি",
+      lang: "bn",
+      duration: 90,
+      prompt: "আন্তর্জাতিক বাজারে কৃত্রিম বুদ্ধিমত্তা ও জেনারেটিভ এআই প্রযুক্তির অভূতপূর্ব অগ্রগতি। শীর্ষ টেক জায়ান্টদের ট্রিলিয়ন ডলার বিনিয়োগ এবং উন্নয়নশীল দেশগুলোর কর্মসংস্থান ও অর্থনীতিতে এর সুদূরপ্রসারী প্রভাব নিয়ে বিশেষ অনুসন্ধানী প্রতিবেদন।"
+    },
+    {
+      title: "উপকূলীয় অঞ্চলে জলবায়ু পরিবর্তনের প্রভাব",
+      lang: "bn",
+      duration: 120,
+      prompt: "সাম্প্রতিক আন্তর্জাতিক পরিবেশ সম্মেলনের বিশেষ অনুসন্ধান: সমুদ্রপৃষ্ঠের উচ্চতা বৃদ্ধি ও সুন্দরবনসহ দক্ষিণাঞ্চলের লবণাক্ততা সমস্যা। জলবায়ু উদ্বাস্তুদের সুরক্ষা ও জরুরি বাঁধ পুনর্নির্মাণের দাবি।"
+    }
+  ],
+  presentation: [
+    {
+      title: "VidForge AI Studio: Architecture & Pitch",
+      lang: "bn",
+      duration: 120,
+      prompt: "VidForge AI Studio — স্থানীয় GPU-নির্ভর স্বয়ংক্রিয় সিনেমাটিক ভিডিও প্রোডাকশন প্ল্যাটফর্মের আর্কিটেকচার। সমস্যা: ক্লাউড সার্ভারের চড়া খরচ ও ধীরগতি। সমাধান: Ollama LLM, F5-TTS জিরো-শট ভয়েস ক্লোনিং ও ComfyUI Z-Image টার্বোর রিয়েল-টাইম ইন্টিগ্রেশন।"
+    },
+    {
+      title: "স্মার্ট এগ্রিকালচার আইওটি প্ল্যাটফর্ম ডেমো",
+      lang: "bn",
+      duration: 90,
+      prompt: "কৃষকদের জন্য সাশ্রয়ী স্মার্ট আইওটি সেন্সর নেটওয়ার্ক। মাটির আর্দ্রতা, তাপমাত্রা ও ফসলের রোগবালাই স্বয়ংক্রিয়ভাবে শনাক্তকরণ ও মোবাইল অ্যাপের মাধ্যমে রিয়েল-টাইম সমাধান দেওয়ার প্রজেক্ট শোকেস।"
+    }
+  ],
+  explainer: [
+    {
+      title: "কোয়ান্টাম কম্পিউটার কীভাবে কাজ করে?",
+      lang: "bn",
+      duration: 90,
+      prompt: "সুপারপজিশন এবং এন্ট্যাঙ্গলমেন্টের রহস্য। সাধারণ সিলিকন বিট (০ ও ১) এবং কোয়ান্টাম কিউবিট (Qubit)-এর পার্থক্য। কেন কোয়ান্টাম কম্পিউটার জটিল রোগবালাই ও আবহাওয়ার পূর্বাভাস কোটি গুণ দ্রুত নির্ণয় করতে পারে?"
+    },
+    {
+      title: "মস্তিষ্কে স্মৃতি কীভাবে তৈরি ও সংরক্ষিত হয়?",
+      lang: "bn",
+      duration: 90,
+      prompt: "মানব মস্তিষ্কের নিউরন ও সিন্যাপসের ভেতর স্মৃতি কীভাবে গঠিত হয়। স্বল্পমেয়াদী স্মৃতি কীভাবে হিপ্পোক্যাম্পাস থেকে দীর্ঘমেয়াদী স্মৃতিতে রূপান্তরিত হয় এবং ঘুমের সময় ব্রেইনের ডেটা ব্যাকআপ প্রক্রিয়া।"
+    }
+  ],
+  commercial: [
+    {
+      title: "Titan-X আল্ট্রা-ফাস্ট চার্জিং স্মার্টওয়াচ",
+      lang: "bn",
+      duration: 60,
+      prompt: "টাইটানিয়াম গ্রেড ফিনিশ, অ্যামোলেড ডিসপ্লে এবং মাত্র ১০ মিনিটের চার্জে পুরো ৭ দিনের ব্যাটারি লাইফ। সার্বক্ষণিক হার্ট রেট ও ফিটনেস ট্র্যাকিং সহ আপনার লাইফস্টাইলের সেরা পারফেক্ট সঙ্গী।"
+    }
+  ],
+  reel: [
+    {
+      title: "৩টি টেকনোলজি ট্রিকস যা সময় বাঁচাবে",
+      lang: "bn",
+      duration: 30,
+      prompt: "স্মার্টফোন ও পিসির এমন ৩টি গোপন ট্রিকস যা ৯৯% মানুষ জানে না! কীভাবে সেকেন্ডের মধ্যে যেকোনো ডকুমেন্ট স্ক্যান করবেন এবং শর্টকাট দিয়ে কাজের গতি দ্বিগুণ করবেন।"
+    }
+  ]
+};
+
+const PROMPT_PLACEHOLDERS: Record<string, string> = {
+  story: "এখানে আপনার গল্প বা ঐতিহাসিক ঘটনাটি বিস্তারিত লিখুন (যেমন: সুলতান সুলেমান, কনস্টান্টিনোপল, বা কোনো বীরত্বগাথা)...",
+  news: "আজকের গুরুত্বপূর্ণ সংবাদ বা অনুসন্ধানী প্রতিবেদনের মূল তথ্য ও ঘটনা লিখুন (যেমন: নতুন প্রযুক্তি আবিষ্কার, বাজেট ঘোষণা, সাম্প্রতিক আন্তর্জাতিক ঘটনা)...",
+  presentation: "আপনার প্রজেক্ট বা ব্যবসার নাম, মূল সমস্যা, প্রযুক্তিগত আর্কিটেকচার ও সমাধানের পয়েন্টগুলো লিখুন...",
+  explainer: "যে জটিল বা শিক্ষণীয় বিষয়টি সহজভাবে ভেঙে বোঝাতে চান তা লিখুন (যেমন: কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে, ব্ল্যাক হোল কী)...",
+  commercial: "আপনার পণ্য বা সেবার নাম, প্রধান সুবিধা, বিশেষ অফার ও কাস্টমারদের আকর্ষণ করার মূল পয়েন্ট লিখুন...",
+  reel: "সোশ্যাল মিডিয়ায় ভাইরাল হওয়ার মতো আকর্ষণীয় শর্ট ভিডিও আইডিয়া ও হুক লিখুন..."
+};
+
+const PROMPT_LABELS: Record<string, string> = {
+  story: "গল্প বা ঐতিহাসিক কাহিনী (Story Concept):",
+  news: "সংবাদের বিষয়বস্তু বা হেডলাইন (News Topic / Reporting Fact):",
+  presentation: "প্রজেক্টের মূল বিষয়বস্তু ও বিবরণ (Project Pitch / Tech Demo):",
+  explainer: "শিক্ষণীয় বিষয়ের বিবরণ (Explainer / Educational Topic):",
+  commercial: "পণ্য বা ব্র্যান্ডের বিবরণ (Commercial / Product Showcase):",
+  reel: "ভাইরাল রিল বা শর্টসের টপিক (Viral Hook & Concept):"
+};
 
 interface ChatMsg {
   id: string;
@@ -146,6 +221,10 @@ export default function App() {
   const [voiceShowcaseEngineFilter, setVoiceShowcaseEngineFilter] = useState<"all" | "elevenlabs" | "f5tts" | "edge">("all");
   
   // Production Form State
+  const [videoType, setVideoType] = useState<"story" | "news" | "presentation" | "explainer" | "commercial" | "reel">("story");
+  const [targetDuration, setTargetDuration] = useState<number>(120); // Default to 2 minutes
+  const [motionMode, setMotionMode] = useState<"kenburns" | "wan" | "static">("kenburns");
+  const [musicTheme, setMusicTheme] = useState<string>("cinematic_epic");
   const [storyPrompt, setStoryPrompt] = useState("");
   const [title, setTitle] = useState("");
   const [language, setLanguage] = useState<string>("bn");
@@ -439,7 +518,11 @@ export default function App() {
           language,
           voice: selectedVoice,
           tts_engine: ttsEngine,
-          aspect_ratio: aspectRatio
+          aspect_ratio: aspectRatio,
+          video_type: videoType,
+          target_duration: targetDuration,
+          motion_mode: motionMode,
+          music_theme: musicTheme
         })
       });
 
@@ -471,7 +554,9 @@ export default function App() {
           language: storyLang,
           genre: storyGenre,
           tone: storyTone,
-          scene_count: storySceneCount
+          scene_count: storySceneCount,
+          video_type: videoType,
+          target_duration: targetDuration
         })
       });
 
@@ -514,7 +599,11 @@ export default function App() {
           voice: selectedVoice,
           tts_engine: ttsEngine,
           aspect_ratio: aspectRatio,
-          scenes: generatedScenes
+          scenes: generatedScenes,
+          video_type: videoType,
+          target_duration: targetDuration,
+          motion_mode: motionMode,
+          music_theme: musicTheme
         })
       });
 
@@ -778,7 +867,155 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Quick Inspirations Collapsible Button */}
+              {/* Video Format / Production Type Selector */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                  <Film size={14} color="#38bdf8" /> ভিডিওর ধরণ ও উদ্দেশ্য (Production Type):
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7 }}>
+                  {[
+                    { id: 'story', label: 'গল্প / ইতিহাস', desc: 'Cinematic Story', icon: '🎬' },
+                    { id: 'news', label: 'সংবাদ বুলেটিন', desc: 'News & Report', icon: '📰' },
+                    { id: 'presentation', label: 'প্রেজেন্টেশন', desc: 'Project & Pitch', icon: '📊' },
+                    { id: 'explainer', label: 'শিক্ষণীয় / টেক', desc: 'Educational Explainer', icon: '🎓' },
+                    { id: 'commercial', label: 'বিজ্ঞাপন / প্রোমো', desc: 'Brand Showcase', icon: '💼' },
+                    { id: 'reel', label: 'ভাইরাল রিল', desc: 'Viral Social Shorts', icon: '📱' },
+                  ].map(item => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setVideoType(item.id as any);
+                        if (item.id === 'news' || item.id === 'reel') setMusicTheme('cinematic_epic');
+                        else if (item.id === 'presentation') setMusicTheme('emotional_drama');
+                        else if (item.id === 'explainer') setMusicTheme('ancient_history');
+                      }}
+                      style={{
+                        padding: '8px 6px',
+                        borderRadius: 10,
+                        background: videoType === item.id ? 'rgba(56, 189, 248, 0.18)' : 'rgba(13, 18, 32, 0.65)',
+                        border: videoType === item.id ? '2px solid #38bdf8' : '1px solid rgba(255,255,255,0.08)',
+                        color: videoType === item.id ? '#38bdf8' : '#94a3b8',
+                        textAlign: 'center',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      <div style={{ fontSize: 15 }}>{item.icon}</div>
+                      <div style={{ fontWeight: 700, fontSize: 11, marginTop: 2, color: videoType === item.id ? '#f8fafc' : '#cbd5e1' }}>{item.label}</div>
+                      <div style={{ fontSize: 9.5, opacity: 0.75 }}>{item.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Target Video Duration System */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
+                    <Clock size={14} color="#60a5fa" /> টার্গেট সময় ও দৈর্ঘ্য (Estimated Duration):
+                  </label>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.15)', padding: '2px 8px', borderRadius: 12, border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                    ⏱️ {targetDuration >= 60 ? `${Math.floor(targetDuration / 60)} মিনিট ${targetDuration % 60 ? `${targetDuration % 60} সে.` : ''}` : `${targetDuration} সেকেন্ড`}
+                  </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 8 }}>
+                  {[
+                    { sec: 30, label: '30s', desc: 'Teaser' },
+                    { sec: 60, label: '1 Min', desc: 'Short' },
+                    { sec: 120, label: '2 Min', desc: 'Standard' },
+                    { sec: 180, label: '3 Min', desc: 'In-Depth' },
+                    { sec: 300, label: '5 Min', desc: 'Full Pitch' },
+                  ].map(p => (
+                    <button
+                      key={p.sec}
+                      type="button"
+                      onClick={() => setTargetDuration(p.sec)}
+                      style={{
+                        padding: '7px 4px',
+                        borderRadius: 8,
+                        background: targetDuration === p.sec ? 'rgba(37, 99, 235, 0.25)' : 'rgba(13, 18, 32, 0.6)',
+                        border: targetDuration === p.sec ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
+                        color: targetDuration === p.sec ? '#60a5fa' : '#94a3b8',
+                        textAlign: 'center',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, fontSize: 11.5 }}>{p.label}</div>
+                      <div style={{ fontSize: 9, opacity: 0.7 }}>{p.desc}</div>
+                    </button>
+                  ))}
+                </div>
+
+                <input
+                  type="range"
+                  min={15}
+                  max={360}
+                  step={15}
+                  value={targetDuration}
+                  onChange={e => setTargetDuration(Number(e.target.value))}
+                  style={{ width: '100%', accentColor: '#38bdf8', cursor: 'pointer', marginBottom: 6 }}
+                />
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 10.5, color: '#94a3b8', background: 'rgba(0,0,0,0.25)', padding: '5px 8px', borderRadius: 6 }}>
+                  <span>📊 আনুমানিক: <strong style={{ color: '#f8fafc' }}>{Math.max(2, Math.round(targetDuration / 14))} টি দৃশ্য</strong></span>
+                  <span>📝 স্ক্রিপ্ট: <strong style={{ color: '#f8fafc' }}>~{Math.round(targetDuration * 1.95)} শব্দ</strong></span>
+                  <span>🎯 দৈর্ঘ্য রেঞ্জ: <strong style={{ color: '#34d399' }}>{Math.max(10, targetDuration - 10)}s – {targetDuration + 10}s</strong></span>
+                </div>
+              </div>
+
+              {/* Visual Quality & Motion Mode */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
+                  <Sparkles size={14} color="#a855f7" /> ভিজ্যুয়াল কোয়ালিটি ও মোশন (Motion Engine):
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 }}>
+                  <div
+                    onClick={() => setMotionMode('kenburns')}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 10,
+                      background: motionMode === 'kenburns' ? 'rgba(168, 85, 247, 0.18)' : 'rgba(13, 18, 32, 0.65)',
+                      border: motionMode === 'kenburns' ? '2px solid #a855f7' : '1px solid rgba(255,255,255,0.08)',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
+                      <span style={{ fontSize: 13 }}>🌟</span>
+                      <strong style={{ fontSize: 11.5, color: motionMode === 'kenburns' ? '#c084fc' : '#f8fafc' }}>Ultra HD Ken Burns</strong>
+                      <span style={{ fontSize: 9, background: 'rgba(34, 197, 94, 0.2)', color: '#4ade80', padding: '1px 4px', borderRadius: 4, fontWeight: 700 }}>প্রস্তাবিত</span>
+                    </div>
+                    <div style={{ fontSize: 9.5, color: '#94a3b8', lineHeight: 1.3 }}>
+                      স্পষ্ট 8K ছবি + সিনেম্যাটিক জুম-ইন, জুম-আউট ও ফেড ইফেক্ট (ছবি ভাঙার কোনো ঝুঁকি নেই)।
+                    </div>
+                  </div>
+
+                  <div
+                    onClick={() => setMotionMode('wan')}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 10,
+                      background: motionMode === 'wan' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(13, 18, 32, 0.65)',
+                      border: motionMode === 'wan' ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
+                      <span style={{ fontSize: 13 }}>🤖</span>
+                      <strong style={{ fontSize: 11.5, color: motionMode === 'wan' ? '#60a5fa' : '#f8fafc' }}>Wan 2.1 AI Motion</strong>
+                      <span style={{ fontSize: 9, background: 'rgba(234, 179, 8, 0.2)', color: '#facc15', padding: '1px 4px', borderRadius: 4, fontWeight: 700 }}>পরীক্ষামূলক</span>
+                    </div>
+                    <div style={{ fontSize: 9.5, color: '#94a3b8', lineHeight: 1.3 }}>
+                      ComfyUI I2V নিউরাল ভিডিও এনিমেশন। ক্যারেক্টার নড়াচড়া তৈরি করে।
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick Inspirations for Active Format */}
               <div style={{ marginBottom: 16 }}>
                 <button
                   type="button"
@@ -802,7 +1039,7 @@ export default function App() {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                     <span>💡</span>
-                    <span>Quick Inspirations (জনপ্রিয় আইডিয়া)</span>
+                    <span>Quick Inspirations ({videoType.toUpperCase()} আইডিয়া)</span>
                   </div>
                   <span style={{ fontSize: 11, color: '#94a3b8' }}>
                     {showInspirations ? '▲ Hide' : '▼ Show Ideas'}
@@ -811,7 +1048,7 @@ export default function App() {
 
                 {showInspirations && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8, padding: 8, background: 'rgba(9, 13, 24, 0.7)', borderRadius: 10, border: '1px solid rgba(255, 255, 255, 0.06)' }}>
-                    {QUICK_INSPIRATIONS.map((qs, i) => (
+                    {(FORMAT_INSPIRATIONS[videoType] || FORMAT_INSPIRATIONS.story).map((qs, i) => (
                       <button
                         key={i}
                         type="button"
@@ -819,10 +1056,12 @@ export default function App() {
                           setStoryPrompt(qs.prompt);
                           setTitle(qs.title);
                           setLanguage(qs.lang);
+                          if (qs.duration) setTargetDuration(qs.duration);
                         }}
                         style={{ textAlign: 'left', background: 'rgba(13, 18, 32, 0.8)', border: '1px solid rgba(255,255,255,0.06)', padding: '7px 10px', borderRadius: 8, fontSize: 12, color: '#cbd5e1', cursor: 'pointer' }}
                       >
                         ✨ <strong style={{ color: '#60a5fa' }}>{qs.title}</strong>
+                        {qs.duration && <span style={{ fontSize: 10, color: '#38bdf8', marginLeft: 8 }}>({qs.duration}s)</span>}
                       </button>
                     ))}
                   </div>
@@ -839,22 +1078,22 @@ export default function App() {
                     type="text"
                     value={title}
                     onChange={e => setTitle(e.target.value)}
-                    placeholder="যেমন: পলাশীর যুদ্ধ এবং মীর জাফরের বিশ্বাসঘাতকতা"
+                    placeholder="যেমন: প্রজেক্ট আর্কিটেকচার বা সংবাদ শিরোনাম"
                     style={{ width: '100%', padding: '10px 12px', fontSize: 13 }}
                   />
                 </div>
 
-                {/* Story Prompt */}
+                {/* Dynamic Story/News/Pitch Prompt */}
                 <div style={{ marginBottom: 16 }}>
                   <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 5 }}>
-                    গল্প বা ঐতিহাসিক কাহিনী (Story / Topic Concept):
+                    {PROMPT_LABELS[videoType] || "বিষয়বস্তু বা কাহিনী (Prompt):"}
                   </label>
                   <textarea
                     rows={4}
                     required
                     value={storyPrompt}
                     onChange={e => setStoryPrompt(e.target.value)}
-                    placeholder="এখানে আপনার কাহিনী বা ঘটনাটি বিস্তারিত লিখুন (যেমন: সুলতান সুলেমান, কনস্টান্টিনোপল, বা কোনো বীরত্বগাথা)..."
+                    placeholder={PROMPT_PLACEHOLDERS[videoType] || "এখানে আপনার কাহিনী বা ঘটনাটি বিস্তারিত লিখুন..."}
                     style={{ width: '100%', padding: '10px 12px', fontSize: 13, resize: 'vertical', lineHeight: 1.5 }}
                   />
                 </div>

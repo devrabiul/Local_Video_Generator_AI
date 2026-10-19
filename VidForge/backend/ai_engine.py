@@ -289,15 +289,85 @@ async def generate_voice_sample(voice: str, engine: str = "edge", ref_audio: str
         
     return f"/output/voice_samples/{engine}_{clean_voice}.mp3"
 
+VIDEO_TYPES_CONFIG = {
+    "story": {
+        "name": "Cinematic Story & Folklore",
+        "persona": "You are a master cinematic film director and historical storyteller.",
+        "narration_guidelines": "Evocative, dramatic, emotionally moving storytelling with heroic and immersive depth.",
+        "visual_guidelines": "Cinematic 8K film lighting, volumetric fog, historical authenticity, shallow depth of field, dramatic character close-ups.",
+        "default_music": "cinematic_epic"
+    },
+    "news": {
+        "name": "News Reporting & Journalism",
+        "persona": "You are a seasoned executive news director and broadcast journalist.",
+        "narration_guidelines": "Factual, crisp, authoritative, objective news reporting. Immediate headlines-first approach. Do NOT use fairy-tale language (never say 'Once upon a time' or 'একদা'). Speak directly with news gravity: 'আজকের প্রধান সংবাদ...', 'বিশেষ অনুসন্ধানী প্রতিবেদনে জানা গেছে...'.",
+        "visual_guidelines": "Photorealistic television broadcast journalism, sleek modern studio desk, field reportage, on-the-scene news cameras, clean editorial lighting, 8k documentary capture.",
+        "default_music": "cinematic_epic"
+    },
+    "presentation": {
+        "name": "Project & Business Presentation",
+        "persona": "You are a Silicon Valley tech executive, keynote presenter, and project architect.",
+        "narration_guidelines": "Professional, articulate, compelling presentation pitch. Structure logically: Executive Problem Statement, The Technological Innovation & Architecture, Key Features & Capabilities, Business Impact & Future Vision. Confident, modern, and clear.",
+        "visual_guidelines": "Ultra-modern enterprise tech visuals, sleek 3D dashboard interfaces, futuristic engineering schematics, minimalist glassmorphism product design, executive keynote aesthetic.",
+        "default_music": "emotional_drama"
+    },
+    "explainer": {
+        "name": "Educational Explainer & Tech Breakdown",
+        "persona": "You are an award-winning science and technology educator and documentary host.",
+        "narration_guidelines": "Clear, engaging, educational breakdown. Demystify complex ideas with intuitive explanations ('কীভাবে এটি কাজ করে...', 'এর পেছনের মূল কারণ...'). Insightful and easy to follow.",
+        "visual_guidelines": "Crystal-clear informational visuals, conceptual diagrams, realistic educational environments, crisp visual storytelling.",
+        "default_music": "ancient_history"
+    },
+    "commercial": {
+        "name": "Product Showcase & Commercial Promo",
+        "persona": "You are an elite creative director for luxury and innovative tech brand commercials.",
+        "narration_guidelines": "Dynamic, high-energy, value-driven commercial hook. Highlight key benefits, evoke desire, and end with an inspiring call to action.",
+        "visual_guidelines": "High-end studio commercial lighting, sleek product renders, glossy 4k macro details, vibrant aesthetic reflections.",
+        "default_music": "cinematic_epic"
+    },
+    "reel": {
+        "name": "Social Media Viral Short / Reel",
+        "persona": "You are a top viral short-form video creator and audience retention specialist.",
+        "narration_guidelines": "High-retention 3-second hook, fast-moving curiosity loops, punchy, concise sentences that keep viewers glued to the screen until the end.",
+        "visual_guidelines": "Bold saturated colors, eye-catching composition optimized for mobile vertical 9:16 viewing, dynamic focal elements.",
+        "default_music": "cinematic_epic"
+    }
+}
+
+def calculate_duration_profile(target_duration: int = 60) -> tuple[int, int, int]:
+    """Calculates (scene_count, words_target, words_per_scene) based on target duration in seconds"""
+    target_sec = max(15, min(600, int(target_duration or 60)))
+    if target_sec <= 35:
+        scene_count = 2
+    elif target_sec <= 65:
+        scene_count = 4
+    elif target_sec <= 100:
+        scene_count = 6
+    elif target_sec <= 140:
+        scene_count = 8  # ~120s / 8 = 15s per scene (e.g. 2-minute video)
+    elif target_sec <= 200:
+        scene_count = 12 # ~180s / 12 = 15s per scene (e.g. 3-minute video)
+    elif target_sec <= 260:
+        scene_count = 16
+    else:
+        scene_count = min(22, max(18, int(round(target_sec / 15))))
+    
+    # Average speech: 1.95 words per second
+    words_target = int(target_sec * 1.95)
+    words_per_scene = max(14, int(round(words_target / scene_count)))
+    return scene_count, words_target, words_per_scene
+
 async def generate_story_script(
     topic: str,
     language: str = "bn",
     model: str = "story-writer:latest",
     genre: str = "historical",
     tone: str = "epic",
-    scene_count: int = 5
+    scene_count: int | None = None,
+    video_type: str = "story",
+    target_duration: int = 60
 ) -> dict:
-    """Uses Ollama to generate a structured storyboard script"""
+    """Uses Ollama to generate a structured storyboard script adapted to video_type and target_duration"""
     lang_names = {
         "bn": "Bengali (বাংলা)",
         "hi": "Hindi (हिन्दी)",
@@ -306,27 +376,38 @@ async def generate_story_script(
         "ar": "Arabic (العربية)"
     }
     target_lang = lang_names.get(language, "Bengali (বাংলা)")
+    cfg = VIDEO_TYPES_CONFIG.get(video_type, VIDEO_TYPES_CONFIG["story"])
+
+    computed_scenes, words_target, words_per_scene = calculate_duration_profile(target_duration)
+    final_scene_count = scene_count if (scene_count and scene_count > 0) else computed_scenes
     
-    system_prompt = f"""You are a master cinematic film director and historical storyteller.
-Generate a cohesive, thrilling, cinematic script with EXACTLY {scene_count} chronological scenes based on the user's topic.
-Genre: {genre}
-Tone: {tone}
+    system_prompt = f"""{cfg['persona']}
+Generate a complete, professional, highly engaging video production script with EXACTLY {final_scene_count} chronological scenes based on the user's prompt.
+Production Format: {cfg['name']}
+Target Total Video Duration: Approximately {target_duration} seconds (~{target_duration // 60}m {target_duration % 60}s).
+
+Strict Timing & Pacing Constraints:
+- You MUST generate EXACTLY {final_scene_count} scenes.
+- Each scene's spoken narration MUST contain approximately {words_per_scene} words (spoken pacing: ~12-15 seconds per scene).
+- The total spoken narration across all {final_scene_count} scenes MUST be approximately {words_target} words to achieve the {target_duration}s duration.
 
 Requirements for each scene:
-1. "narration": The spoken voiceover script STRICTLY in {target_lang}. Make it deeply evocative, epic, dramatic, and emotionally moving with natural pauses (... and —).
-2. "visual_prompt": A highly detailed visual description written in English for 8K photorealistic cinematic image generation (e.g. lighting, camera angle, character appearance, mood, historical authenticity).
-3. "motion_prompt": A specific character and camera motion description in English for AI video animation (e.g. "slow cinematic push in, character breathing heavily, cape fluttering in wind, dust drifting").
+1. "narration": The spoken voiceover script STRICTLY in {target_lang}.
+   Format Guidelines: {cfg['narration_guidelines']}
+2. "visual_prompt": A highly detailed visual description written in English for 8K photorealistic image generation (ComfyUI Z-Image-Turbo).
+   Visual Guidelines: {cfg['visual_guidelines']}
+3. "motion_prompt": A camera motion description in English for smooth Ken Burns cinematic panning/zooming (e.g. "slow cinematic push in", "gentle pan right", "dynamic zoom out").
 
 Respond ONLY with valid JSON in this exact structure:
 {{
-  "title": "Short Gripping Title",
-  "synopsis": "Brief 1-2 sentence overview of the storyline",
+  "title": "Clear Gripping Title",
+  "synopsis": "1-2 sentence overview of the video content",
   "scenes": [
     {{
       "id": 1,
-      "narration": "Voiceover line in {target_lang}",
-      "visual_prompt": "Cinematic visual description in English",
-      "motion_prompt": "Motion description in English"
+      "narration": "Voiceover line in {target_lang} (~{words_per_scene} words)",
+      "visual_prompt": "Visual description in English",
+      "motion_prompt": "Camera motion in English"
     }}
   ]
 }}"""
@@ -336,7 +417,7 @@ Respond ONLY with valid JSON in this exact structure:
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Topic / Story Concept:\n{topic}"}
+                {"role": "user", "content": f"Topic / Concept:\n{topic}"}
             ],
             "stream": False,
             "format": "json"
@@ -362,17 +443,19 @@ async def get_active_ollama_model() -> str:
         pass
     return "story-writer:latest"
 
-async def plan_story(prompt: str, language: str, model: str = None) -> dict:
+async def plan_script(prompt: str, language: str, video_type: str = "story", target_duration: int = 60, model: str = None) -> dict:
     if not model:
         model = await get_active_ollama_model()
     return await generate_story_script(
         topic=prompt,
         language=language,
         model=model,
-        genre="historical drama",
-        tone="cinematic epic",
-        scene_count=5
+        video_type=video_type,
+        target_duration=target_duration
     )
+
+async def plan_story(prompt: str, language: str, model: str = None) -> dict:
+    return await plan_script(prompt, language, video_type="story", target_duration=60, model=model)
 
 async def generate_voiceover(
     text: str,
@@ -663,42 +746,68 @@ def extend_video_to_duration(raw_video: Path, target_duration: float, aspect: st
     return final_video
 
 def create_fallback_motion_clip(image_path: Path, duration: float, aspect: str, output_path: Path, motion_type: str = "zoom_in") -> Path:
-    """High-quality Ken Burns camera motion fallback with multi-axis movement and subtle camera sway"""
+    """High-quality Ken Burns camera motion with multi-axis movements, pristine 2X upscale headroom, and smooth fade transitions"""
     dims = ASPECT_RESOLUTIONS.get(aspect, ASPECT_RESOLUTIONS["9:16"])
     rw, rh = dims["render_w"], dims["render_h"]
     fps = 30
     total_frames = max(30, int(duration * fps))
 
+    # High quality upscale for zoompan headroom
+    scale_w = rw * 2
+    scale_h = rh * 2
+
+    # Smooth Ken Burns camera movements
     if motion_type == "zoom_in":
-        vf = f"scale={rw*2}:{rh*2},zoompan=z='min(zoom+0.0018,1.25)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
+        # Slow cinematic zoom in from 1.0 to 1.15
+        vf = f"scale={scale_w}:{scale_h},zoompan=z='min(zoom+0.0008,1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
     elif motion_type == "zoom_out":
-        vf = f"scale={rw*2}:{rh*2},zoompan=z='if(lte(zoom,1.0),1.25,max(1.001,zoom-0.0018))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
-    else: # Pan with slight zoom
-        vf = f"scale={rw*2}:{rh*2},zoompan=z='1.18':x='(it/{duration})*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
+        # Slow cinematic zoom out from 1.15 to 1.0
+        vf = f"scale={scale_w}:{scale_h},zoompan=z='if(lte(zoom,1.0),1.15,max(1.001,zoom-0.0008))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
+    elif motion_type == "pan_right":
+        # Gentle pan from left to right with slight 1.10 zoom
+        vf = f"scale={scale_w}:{scale_h},zoompan=z='1.10':x='(it/{duration})*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
+    elif motion_type == "pan_left":
+        # Gentle pan from right to left with slight 1.10 zoom
+        vf = f"scale={scale_w}:{scale_h},zoompan=z='1.10':x='(1-it/{duration})*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
+    elif motion_type == "tilt_up":
+        # Gentle tilt from bottom to top with slight 1.08 zoom
+        vf = f"scale={scale_w}:{scale_h},zoompan=z='1.08':x='iw/2-(iw/zoom/2)':y='(1-it/{duration})*(ih-ih/zoom)':d={total_frames}:s={rw}x{rh}:fps={fps}"
+    else: # static_subtle / clean presentation
+        # Subtle breathe zoom (1.0 to 1.04)
+        vf = f"scale={scale_w}:{scale_h},zoompan=z='min(zoom+0.0003,1.04)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
+
+    # Soft cinematic dissolve/fade transition at clip boundaries (0.35s in, 0.35s out)
+    fade_d = min(0.35, duration / 4)
+    fade_out_st = max(0.1, duration - fade_d)
+    vf += f",fade=t=in:st=0:d={fade_d:.2f},fade=t=out:st={fade_out_st:.2f}:d={fade_d:.2f}"
 
     cmd = [
         "ffmpeg", "-y", "-loop", "1", "-i", str(image_path),
         "-vf", vf,
         "-t", f"{duration:.2f}",
-        "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19", "-pix_fmt", "yuv420p",
+        "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "18", "-pix_fmt", "yuv420p",
         str(output_path)
     ]
     subprocess.run(cmd, check=True, capture_output=True)
     return output_path
 
-async def animate_scene(image_path: Path, motion_prompt: str, duration: float, aspect: str, output_path: Path, fallback_idx: int = 0) -> Path:
-    """Full animation controller: tries Wan 2.1 I2V character motion first, falls back gracefully if needed"""
-    raw_wan = output_path.parent / f"raw_wan_{output_path.stem}.mp4"
-    success = await animate_scene_wan(image_path, motion_prompt, aspect, raw_wan)
-    if success and raw_wan.exists() and raw_wan.stat().st_size > 1000:
-        logger.info(f"Applying seamless ping-pong loop to Wan 2.1 clip for duration {duration:.2f}s...")
-        extend_video_to_duration(raw_wan, duration, aspect, output_path)
-        return output_path
-    
-    # Fallback to enhanced dynamic motion
-    logger.info(f"Using enhanced dynamic camera motion for {output_path.name}")
-    mtypes = ["zoom_in", "pan", "zoom_out"]
-    create_fallback_motion_clip(image_path, duration, aspect, output_path, motion_type=mtypes[fallback_idx % len(mtypes)])
+async def animate_scene(image_path: Path, motion_prompt: str, duration: float, aspect: str, output_path: Path, fallback_idx: int = 0, motion_mode: str = "kenburns") -> Path:
+    """Full animation controller: supports Ken Burns (Ultra HD), Wan 2.1 AI Motion, and Clean Presentation"""
+    mtypes = ["zoom_in", "pan_right", "zoom_out", "tilt_up", "pan_left"]
+    chosen_motion = mtypes[fallback_idx % len(mtypes)] if motion_mode != "static" else "static_subtle"
+
+    if motion_mode == "wan":
+        raw_wan = output_path.parent / f"raw_wan_{output_path.stem}.mp4"
+        success = await animate_scene_wan(image_path, motion_prompt, aspect, raw_wan)
+        if success and raw_wan.exists() and raw_wan.stat().st_size > 1000:
+            logger.info(f"Applying seamless ping-pong loop to Wan 2.1 clip for duration {duration:.2f}s...")
+            extend_video_to_duration(raw_wan, duration, aspect, output_path)
+            return output_path
+        logger.info(f"Wan 2.1 unavailable or timed out; falling back to Ken Burns ({chosen_motion})")
+
+    # Ultra HD Ken Burns camera motion (recommended, 100% distortion-free)
+    logger.info(f"Rendering Ken Burns motion ({chosen_motion}) with smooth fade transitions for {output_path.name}")
+    create_fallback_motion_clip(image_path, duration, aspect, output_path, motion_type=chosen_motion)
     return output_path
 
 def assemble_final_video(scene_videos: list[Path], scene_audios: list[Path], output_path: Path, aspect: str, music_theme: str = "cinematic_epic") -> Path:

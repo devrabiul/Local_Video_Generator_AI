@@ -45,6 +45,10 @@ class CreateJobRequest(BaseModel):
     aspect_ratio: str = "9:16"
     title: str = ""
     scenes: list[dict] | None = None
+    video_type: str = "story"
+    target_duration: int = 60
+    motion_mode: str = "kenburns"
+    music_theme: str = "cinematic_epic"
 
 class TTSConfigRequest(BaseModel):
     elevenlabs_api_key: str | None = None
@@ -59,7 +63,9 @@ class GenerateStoryRequest(BaseModel):
     language: str = "bn"
     genre: str = "historical"
     tone: str = "epic"
-    scene_count: int = 5
+    scene_count: int | None = None
+    video_type: str = "story"
+    target_duration: int = 60
 
 class ChatMessage(BaseModel):
     role: str
@@ -192,7 +198,9 @@ async def generate_story_api(req: GenerateStoryRequest):
             model=req.model,
             genre=req.genre,
             tone=req.tone,
-            scene_count=req.scene_count
+            scene_count=req.scene_count,
+            video_type=req.video_type,
+            target_duration=req.target_duration
         )
         return res
     except Exception as e:
@@ -253,7 +261,11 @@ def create_job(req: CreateJobRequest):
         language=req.language,
         voice=voice_identifier,
         aspect_ratio=req.aspect_ratio,
-        scenes_json=scenes_json
+        scenes_json=scenes_json,
+        video_type=req.video_type,
+        target_duration=req.target_duration,
+        motion_mode=req.motion_mode,
+        music_theme=req.music_theme
     )
     return {"id": job_id, "status": "QUEUED"}
 
