@@ -667,14 +667,14 @@ async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, r
             "class_type": "CLIPTextEncode",
             "inputs": {
                 "clip": ["38", 0],
-                "text": f"{motion_prompt}, cinematic motion, character moving naturally, dynamic lighting"
+                "text": f"{motion_prompt}, cinematic motion, photorealistic, fluid natural movement, dynamic studio lighting, highly detailed"
             }
         },
         "7": {
             "class_type": "CLIPTextEncode",
             "inputs": {
                 "clip": ["38", 0],
-                "text": "blurry, static, distorted, artifacts, low quality, jittery"
+                "text": "blurry, static, distorted, artifacts, low quality, jittery, disfigured, deformed, noisy"
             }
         },
         "54": {
@@ -708,7 +708,7 @@ async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, r
                 "start_image": ["52", 0],
                 "width": dims["wan_w"],
                 "height": dims["wan_h"],
-                "length": 17, # 17 frames at 16fps = 1.06s base motion
+                "length": 33, # 33 frames (4n+1) at 16fps = 2.06s smooth base motion
                 "batch_size": 1
             }
         },
@@ -720,7 +720,7 @@ async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, r
                 "negative": ["50", 1],
                 "latent_image": ["50", 2],
                 "seed": random.randint(1, 2**31 - 1),
-                "steps": 10,
+                "steps": 20, # 20 steps with uni_pc gives sharp, artifact-free diffusion
                 "cfg": 5.0,
                 "sampler_name": "uni_pc",
                 "scheduler": "simple",
