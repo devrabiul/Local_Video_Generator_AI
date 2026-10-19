@@ -650,15 +650,27 @@ export default function App() {
     }
   };
 
-  const activeJob = jobs.find(j => j.status !== 'DONE' && j.status !== 'FAILED');
-  const queuedJobs = jobs.filter(j => j.status === 'QUEUED' && j.id !== activeJob?.id);
+  const RUNNING_STATUSES: Job['status'][] = ['SCRIPTING', 'VOICEOVER', 'GENERATING_IMAGES', 'ANIMATING_VIDEO', 'COMPOSING'];
+  const runningJobs = jobs.filter(j => RUNNING_STATUSES.includes(j.status));
+  const activeJob = runningJobs[0] || null;
+  const queuedJobs = jobs.filter(j => j.status === 'QUEUED');
   const completedJobs = jobs.filter(j => j.status === 'DONE');
   const latestFailedJob = jobs.find(j => j.status === 'FAILED' && !dismissedFailedJobIds.includes(j.id));
 
   const getStatusBadge = (status: Job['status']) => {
     switch (status) {
       case 'QUEUED':
-        return <span style={{ background: '#1e293b', color: '#94a3b8', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(255,255,255,0.08)' }}>Queued</span>;
+        return <span style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(245, 158, 11, 0.3)' }}>Waiting in Queue</span>;
+      case 'SCRIPTING':
+        return <span style={{ background: 'rgba(56, 189, 248, 0.18)', color: '#38bdf8', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(56, 189, 248, 0.35)' }}>Scripting (AI)</span>;
+      case 'VOICEOVER':
+        return <span style={{ background: 'rgba(168, 85, 247, 0.18)', color: '#c084fc', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(168, 85, 247, 0.35)' }}>Voiceover</span>;
+      case 'GENERATING_IMAGES':
+        return <span style={{ background: 'rgba(6, 182, 212, 0.18)', color: '#22d3ee', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(6, 182, 212, 0.35)' }}>Rendering Visuals</span>;
+      case 'ANIMATING_VIDEO':
+        return <span style={{ background: 'rgba(59, 130, 246, 0.18)', color: '#60a5fa', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(59, 130, 246, 0.35)' }}>Animating Motion</span>;
+      case 'COMPOSING':
+        return <span style={{ background: 'rgba(99, 102, 241, 0.18)', color: '#818cf8', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(99, 102, 241, 0.35)' }}>Mastering Video</span>;
       case 'DONE':
         return <span style={{ background: 'rgba(16, 185, 129, 0.18)', color: '#34d399', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(16, 185, 129, 0.3)' }}>Completed</span>;
       case 'FAILED':
@@ -743,6 +755,24 @@ export default function App() {
               {systemStatus.comfyui_online ? 'Port 8188' : 'Offline'}
             </span>
           </div>
+
+          {/* Live Running Task Capsule */}
+          {runningJobs.length > 0 && (
+            <div className="status-capsule" style={{ borderColor: 'rgba(59, 130, 246, 0.4)', background: 'rgba(59, 130, 246, 0.12)' }}>
+              <div className="pulse-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: '#60a5fa' }} />
+              <span style={{ fontSize: 11, color: '#93c5fd' }}>Running:</span>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: '#60a5fa' }}>{runningJobs[0].progress}%</span>
+            </div>
+          )}
+
+          {/* Live Waiting Queue Capsule */}
+          {queuedJobs.length > 0 && (
+            <div className="status-capsule" style={{ borderColor: 'rgba(245, 158, 11, 0.4)', background: 'rgba(245, 158, 11, 0.12)' }}>
+              <Clock size={12} color="#fbbf24" />
+              <span style={{ fontSize: 11, color: '#fde68a' }}>Queue:</span>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: '#f59e0b' }}>{queuedJobs.length} Waiting</span>
+            </div>
+          )}
 
           {/* Refresh Action Button */}
           <button
@@ -1390,21 +1420,53 @@ export default function App() {
 
             {/* Right Panel: Live Worker Monitor & Queue */}
             <section style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              {/* Active Job Spotlight */}
+              
+              {/* Failed Job Banner (if any) */}
+              {latestFailedJob && (
+                <div className="glass-panel" style={{ padding: 18, border: '1px solid rgba(239, 68, 68, 0.45)', background: 'rgba(239, 68, 68, 0.08)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <AlertTriangle size={18} color="#ef4444" />
+                      <h4 style={{ margin: 0, fontSize: 13.5, fontWeight: 700, color: '#f87171' }}>
+                        Job Failed: {latestFailedJob.title}
+                      </h4>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleDismissFailed(latestFailedJob.id)}
+                      style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#fca5a5', padding: '2px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}
+                    >
+                      Dismiss / Clear
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.4, wordBreak: 'break-word', maxHeight: 90, overflowY: 'auto', background: 'rgba(0,0,0,0.3)', padding: '6px 10px', borderRadius: 6 }}>
+                    {latestFailedJob.error_message || 'An error occurred during video production.'}
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION 1: RUNNING TASKS SPOTLIGHT */}
               {activeJob ? (
                 <div className="glass-panel active-job-glow" style={{ padding: 22 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div className="pulse-dot" style={{ width: 10, height: 10, borderRadius: '50%', background: '#3b82f6', boxShadow: '0 0 10px #3b82f6' }} />
-                      <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Active Job: {activeJob.title}</h3>
+                      <div>
+                        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#60a5fa', fontWeight: 800 }}>
+                          Currently Running Task
+                        </div>
+                        <h3 style={{ fontSize: 16, fontWeight: 700, margin: '2px 0 0 0', color: '#f8fafc' }}>
+                          {activeJob.title}
+                        </h3>
+                      </div>
                     </div>
                     {getStatusBadge(activeJob.status)}
                   </div>
 
-                  {/* Progress Bar */}
+                  {/* Progress Bar & Current Step */}
                   <div style={{ marginBottom: 14 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>
-                      <span style={{ color: '#cbd5e1' }}>{activeJob.current_step}</span>
+                      <span style={{ color: '#cbd5e1', fontWeight: 500 }}>{activeJob.current_step || 'Processing...'}</span>
                       <span style={{ fontWeight: 700, color: '#60a5fa' }}>{activeJob.progress}%</span>
                     </div>
                     <div style={{ width: '100%', height: 8, background: 'rgba(255,255,255,0.08)', borderRadius: 10, overflow: 'hidden' }}>
@@ -1430,72 +1492,96 @@ export default function App() {
                       </div>
                     </div>
                   )}
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {latestFailedJob && (
-                    <div className="glass-panel" style={{ padding: 18, border: '1px solid rgba(239, 68, 68, 0.45)', background: 'rgba(239, 68, 68, 0.08)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <AlertTriangle size={18} color="#ef4444" />
-                          <h4 style={{ margin: 0, fontSize: 13.5, fontWeight: 700, color: '#f87171' }}>
-                            Last Job Failed: {latestFailedJob.title}
-                          </h4>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDismissFailed(latestFailedJob.id)}
-                          style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#fca5a5', padding: '2px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}
-                        >
-                          Dismiss / Clear
-                        </button>
+
+                  {/* Other Running Tasks if multiple */}
+                  {runningJobs.length > 1 && (
+                    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 8 }}>
+                        Other In-Progress Tasks ({runningJobs.length - 1}):
                       </div>
-                      <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.4, wordBreak: 'break-word', maxHeight: 90, overflowY: 'auto', background: 'rgba(0,0,0,0.3)', padding: '6px 10px', borderRadius: 6 }}>
-                        {latestFailedJob.error_message || 'An error occurred during video production.'}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {runningJobs.slice(1).map(rj => (
+                          <div key={rj.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: 6, fontSize: 12 }}>
+                            <span style={{ color: '#cbd5e1' }}>{rj.title}</span>
+                            <span style={{ color: '#60a5fa', fontWeight: 600 }}>{rj.progress}%</span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
-
-                  <div className="glass-panel" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 14, color: '#94a3b8' }}>
-                    <CheckCircle2 size={24} color="#3b82f6" />
-                    <div>
-                      <div style={{ fontWeight: 600, color: '#f8fafc' }}>Production Pipeline is Idle</div>
-                      <div style={{ fontSize: 12 }}>Submit a story on the left, or use the <strong>Ollama Story Studio</strong> tab to write and fine-tune your script.</div>
+                </div>
+              ) : queuedJobs.length > 0 ? (
+                <div className="glass-panel" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 14, border: '1px solid rgba(245, 158, 11, 0.25)', background: 'rgba(245, 158, 11, 0.05)' }}>
+                  <Clock size={24} color="#f59e0b" className="spin" />
+                  <div>
+                    <div style={{ fontWeight: 700, color: '#f8fafc', fontSize: 14 }}>Preparing to Process Queue</div>
+                    <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 2 }}>
+                      Worker is picking up the next queued task: <strong style={{ color: '#f59e0b' }}>{queuedJobs[0].title}</strong>
                     </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="glass-panel" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 14, color: '#94a3b8' }}>
+                  <CheckCircle2 size={24} color="#3b82f6" />
+                  <div>
+                    <div style={{ fontWeight: 600, color: '#f8fafc' }}>Production Pipeline is Idle</div>
+                    <div style={{ fontSize: 12 }}>Submit a story on the left, or use the <strong>Ollama Story Studio</strong> tab to write and fine-tune your script.</div>
                   </div>
                 </div>
               )}
 
-              {/* Waiting Queue List */}
+              {/* SECTION 2: WAITING IN QUEUE LIST */}
               <div className="glass-panel" style={{ padding: 20 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Clock size={16} color="#60a5fa" />
-                    <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Waiting in Queue ({queuedJobs.length})</h3>
+                    <Clock size={16} color="#f59e0b" />
+                    <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: '#f8fafc' }}>
+                      Waiting in Queue ({queuedJobs.length})
+                    </h3>
                   </div>
+                  {queuedJobs.length > 0 && (
+                    <span style={{ fontSize: 11, color: '#f59e0b', background: 'rgba(245, 158, 11, 0.12)', padding: '2px 8px', borderRadius: 12, fontWeight: 600, border: '1px solid rgba(245, 158, 11, 0.25)' }}>
+                      FIFO Order
+                    </span>
+                  )}
                 </div>
 
                 {queuedJobs.length === 0 ? (
-                  <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
-                    No other videos waiting in queue. The next one you add will begin immediately.
+                  <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13, background: 'rgba(0,0,0,0.15)', borderRadius: 8 }}>
+                    No videos waiting in queue. Any new video you submit will begin immediately.
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {queuedJobs.map((qj, idx) => (
-                      <div key={qj.id} style={{ background: 'rgba(13, 18, 32, 0.6)', padding: '12px 16px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div key={qj.id} style={{ background: 'rgba(13, 18, 32, 0.6)', padding: '12px 16px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: '#60a5fa', background: 'rgba(37, 99, 235, 0.15)', width: 24, height: 24, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            {idx + 1}
+                          <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b', background: 'rgba(245, 158, 11, 0.15)', width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+                            #{idx + 1}
                           </span>
                           <div>
-                            <div style={{ fontWeight: 600, fontSize: 13, color: '#f8fafc' }}>{qj.title}</div>
-                            <div style={{ fontSize: 11, color: '#64748b' }}>Language: {qj.language.toUpperCase()} • Format: {qj.aspect_ratio}</div>
+                            <div style={{ fontWeight: 600, fontSize: 13.5, color: '#f8fafc' }}>{qj.title}</div>
+                            <div style={{ fontSize: 11, color: '#94a3b8', display: 'flex', gap: 8, marginTop: 3 }}>
+                              <span>Format: {qj.aspect_ratio}</span>
+                              <span>•</span>
+                              <span>Lang: {qj.language.toUpperCase()}</span>
+                              <span>•</span>
+                              <span>Target: ~{qj.target_duration}s</span>
+                              <span>•</span>
+                              <span style={{ textTransform: 'capitalize' }}>{qj.video_type}</span>
+                            </div>
                           </div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          {getStatusBadge(qj.status)}
-                          <button onClick={() => handleDelete(qj.id)} style={{ background: 'none', color: '#ef4444', padding: 4 }}>
-                            <Trash2 size={15} />
+                          <span style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+                            Waiting in Queue
+                          </span>
+                          <button 
+                            type="button"
+                            onClick={() => handleDelete(qj.id)} 
+                            title="Cancel & Remove from Queue"
+                            style={{ background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#ef4444', padding: '5px 8px', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                          >
+                            <Trash2 size={14} />
                           </button>
                         </div>
                       </div>
