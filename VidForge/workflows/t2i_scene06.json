@@ -1,0 +1,151 @@
+﻿{
+    "1":  {
+              "inputs":  {
+                             "unet_name":  "z_image_turbo_bf16.safetensors",
+                             "weight_dtype":  "default"
+                         },
+              "class_type":  "UNETLoader",
+              "_meta":  {
+                            "title":  "Load Diffusion Model"
+                        }
+          },
+    "2":  {
+              "inputs":  {
+                             "clip_name":  "qwen_3_4b_fp8_mixed.safetensors",
+                             "type":  "lumina2"
+                         },
+              "class_type":  "CLIPLoader",
+              "_meta":  {
+                            "title":  "Load CLIP"
+                        }
+          },
+    "3":  {
+              "inputs":  {
+                             "vae_name":  "ae.safetensors"
+                         },
+              "class_type":  "VAELoader",
+              "_meta":  {
+                            "title":  "Load VAE"
+                        }
+          },
+    "4":  {
+              "inputs":  {
+                             "width":  768,
+                             "height":  1344,
+                             "batch_size":  1
+                         },
+              "class_type":  "EmptyLatentImage",
+              "_meta":  {
+                            "title":  "VF_LATENT"
+                        }
+          },
+    "5":  {
+              "inputs":  {
+                             "text":  "cinematic historical photorealism, final desperate defense of Constantinople on May 29, 1453, Byzantine Emperor Constantine XI Palaiologos, rugged 49-year-old face and grey-streaked beard, wearing ornate but battle-worn gilded Byzantine eagle cuirass and deep purple imperial mantle, charging forward with a drawn medieval sword toward a breached section of the massive Constantinople city wall, determined defiant expression, exhausted Byzantine defenders fighting in the smoky background, scattered shields and broken masonry, Ottoman soldiers emerging through the breach in the distance, glowing embers and dust in shafts of dawn light, historically grounded 15th-century Byzantine weapons and armor, dramatic dynamic movement, realistic anatomy, detailed fabric and metal, epic tragic historical film still, low cinematic camera angle, strong composition with emperor as clear central subject, vertical 9:16 framing, photorealistic, no text, no watermark",
+                             "clip":  [
+                                          "2",
+                                          0
+                                      ]
+                         },
+              "class_type":  "CLIPTextEncode",
+              "_meta":  {
+                            "title":  "VF_PROMPT"
+                        }
+          },
+    "6":  {
+              "inputs":  {
+                             "text":  "cartoon, anime, fantasy magic, modern weapons, guns, modern uniforms, Roman legionary costume, shiny pristine armor, superhero pose, exaggerated muscles, duplicate emperor, extra limbs, malformed hands, extra fingers, blurry face, gore, dismemberment, text, subtitles, watermark, logo",
+                             "clip":  [
+                                          "2",
+                                          0
+                                      ]
+                         },
+              "class_type":  "CLIPTextEncode",
+              "_meta":  {
+                            "title":  "VF_NEG"
+                        }
+          },
+    "7":  {
+              "inputs":  {
+                             "seed":  1457,
+                             "steps":  8,
+                             "cfg":  1.0,
+                             "sampler_name":  "euler",
+                             "scheduler":  "simple",
+                             "denoise":  1.0,
+                             "model":  [
+                                           "10",
+                                           0
+                                       ],
+                             "positive":  [
+                                              "5",
+                                              0
+                                          ],
+                             "negative":  [
+                                              "6",
+                                              0
+                                          ],
+                             "latent_image":  [
+                                                  "11",
+                                                  0
+                                              ]
+                         },
+              "class_type":  "KSampler",
+              "_meta":  {
+                            "title":  "VF_SAMPLER"
+                        }
+          },
+    "8":  {
+              "inputs":  {
+                             "samples":  [
+                                             "7",
+                                             0
+                                         ],
+                             "vae":  [
+                                         "3",
+                                         0
+                                     ]
+                         },
+              "class_type":  "VAEDecode",
+              "_meta":  {
+                            "title":  "VAE Decode"
+                        }
+          },
+    "9":  {
+              "inputs":  {
+                             "filename_prefix":  "constantinople_1453/scene_06_final_charge",
+                             "images":  [
+                                            "8",
+                                            0
+                                        ]
+                         },
+              "class_type":  "SaveImage",
+              "_meta":  {
+                            "title":  "VF_SAVE"
+                        }
+          },
+    "10":  {
+               "class_type":  "ModelSamplingAuraFlow",
+               "inputs":  {
+                              "model":  [
+                                            "1",
+                                            0
+                                        ],
+                              "shift":  3
+                          },
+               "_meta":  {
+                             "title":  "VF_MODEL_SAMPLING"
+                         }
+           },
+    "11":  {
+               "class_type":  "EmptySD3LatentImage",
+               "inputs":  {
+                              "width":  768,
+                              "height":  1344,
+                              "batch_size":  1
+                          },
+               "_meta":  {
+                             "title":  "VF_LATENT"
+                         }
+           }
+}

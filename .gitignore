@@ -1,0 +1,54 @@
+# =========================================================================
+# VidForge AI Studio & AI Workspace — Git Ignore Configuration
+# =========================================================================
+
+# 1. Large AI Checkpoints & Model Weights (Download separately on new PC)
+ollama-models/
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.ckpt
+*.gguf
+*.onnx
+
+# 2. Heavy External Portable Suites & Embeded Python
+ComfyUI_windows_portable/
+
+# 3. Generated Video, Audio & Runtime Production Job Data
+VidForge/jobs/
+VidForge/output/
+VidForge/inbox/
+VidForge/logs/
+*.mp4
+vidforge.db
+*.db
+*.sqlite3
+
+# Explicitly keep lightweight voice clones & royalty-free background music
+!VidForge/backend/ref_voices/*.wav
+!VidForge/backend/ref_voices/*.mp3
+!VidForge/backend/ref_voices/manifest.json
+!VidForge/music/*.mp3
+
+# 4. Python & Node Dependencies and Build Caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+node_modules/
+VidForge/ui/node_modules/
+dist/
+VidForge/ui/dist/
+build/
+.cache/
+
+# 5. Local Configs, Secrets & Logs
+tts_config.json
+*.log
+.env
+.env.local
+.DS_Store
+Thumbs.db
+desktop.ini

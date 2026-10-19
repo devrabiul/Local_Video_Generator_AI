@@ -1,0 +1,151 @@
+﻿{
+    "1":  {
+              "inputs":  {
+                             "unet_name":  "z_image_turbo_bf16.safetensors",
+                             "weight_dtype":  "default"
+                         },
+              "class_type":  "UNETLoader",
+              "_meta":  {
+                            "title":  "Load Diffusion Model"
+                        }
+          },
+    "2":  {
+              "inputs":  {
+                             "clip_name":  "qwen_3_4b_fp8_mixed.safetensors",
+                             "type":  "lumina2"
+                         },
+              "class_type":  "CLIPLoader",
+              "_meta":  {
+                            "title":  "Load CLIP"
+                        }
+          },
+    "3":  {
+              "inputs":  {
+                             "vae_name":  "ae.safetensors"
+                         },
+              "class_type":  "VAELoader",
+              "_meta":  {
+                            "title":  "Load VAE"
+                        }
+          },
+    "4":  {
+              "inputs":  {
+                             "width":  768,
+                             "height":  1344,
+                             "batch_size":  1
+                         },
+              "class_type":  "EmptyLatentImage",
+              "_meta":  {
+                            "title":  "VF_LATENT"
+                        }
+          },
+    "5":  {
+              "inputs":  {
+                             "text":  "cinematic historical photorealism, Ottoman sailors and soldiers secretly hauling wooden war galleys over greased wooden logs across a hillside near Constantinople during the night in May 1453, large medieval wooden ships with curved hulls being dragged over land by teams of men using thick ropes, torchlight illuminating exhausted workers, warm orange flames against deep blue moonlit night, rugged grassy terrain, distant silhouette of the Byzantine city walls and the Golden Horn, Ottoman banners moving in the night breeze, dramatic low-angle view, authentic 15th-century clothing and ship construction, realistic ropes, timber and wood grain, atmospheric smoke and mist, epic historical film still, natural cinematic lighting, 35mm film, vertical 9:16 composition, no text, no watermark",
+                             "clip":  [
+                                          "2",
+                                          0
+                                      ]
+                         },
+              "class_type":  "CLIPTextEncode",
+              "_meta":  {
+                            "title":  "VF_PROMPT"
+                        }
+          },
+    "6":  {
+              "inputs":  {
+                             "text":  "blurry, low quality, cartoon, modern ships, steamships, engines, modern cranes, modern clothing, fantasy armor, impossible ship anatomy, ships floating in the sky, duplicate masts, distorted ropes, extra limbs, text, watermark, logo",
+                             "clip":  [
+                                          "2",
+                                          0
+                                      ]
+                         },
+              "class_type":  "CLIPTextEncode",
+              "_meta":  {
+                            "title":  "VF_NEG"
+                        }
+          },
+    "7":  {
+              "inputs":  {
+                             "seed":  1455,
+                             "steps":  8,
+                             "cfg":  1.0,
+                             "sampler_name":  "euler",
+                             "scheduler":  "simple",
+                             "denoise":  1.0,
+                             "model":  [
+                                           "10",
+                                           0
+                                       ],
+                             "positive":  [
+                                              "5",
+                                              0
+                                          ],
+                             "negative":  [
+                                              "6",
+                                              0
+                                          ],
+                             "latent_image":  [
+                                                  "11",
+                                                  0
+                                              ]
+                         },
+              "class_type":  "KSampler",
+              "_meta":  {
+                            "title":  "VF_SAMPLER"
+                        }
+          },
+    "8":  {
+              "inputs":  {
+                             "samples":  [
+                                             "7",
+                                             0
+                                         ],
+                             "vae":  [
+                                         "3",
+                                         0
+                                     ]
+                         },
+              "class_type":  "VAEDecode",
+              "_meta":  {
+                            "title":  "VAE Decode"
+                        }
+          },
+    "9":  {
+              "inputs":  {
+                             "filename_prefix":  "constantinople_1453/scene_04_galleys_over_land",
+                             "images":  [
+                                            "8",
+                                            0
+                                        ]
+                         },
+              "class_type":  "SaveImage",
+              "_meta":  {
+                            "title":  "VF_SAVE"
+                        }
+          },
+    "10":  {
+               "class_type":  "ModelSamplingAuraFlow",
+               "inputs":  {
+                              "model":  [
+                                            "1",
+                                            0
+                                        ],
+                              "shift":  3
+                          },
+               "_meta":  {
+                             "title":  "VF_MODEL_SAMPLING"
+                         }
+           },
+    "11":  {
+               "class_type":  "EmptySD3LatentImage",
+               "inputs":  {
+                              "width":  768,
+                              "height":  1344,
+                              "batch_size":  1
+                          },
+               "_meta":  {
+                             "title":  "VF_LATENT"
+                         }
+           }
+}

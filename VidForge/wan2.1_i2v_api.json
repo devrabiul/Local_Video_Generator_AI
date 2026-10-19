@@ -1,0 +1,212 @@
+{
+  "37": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.1_i2v_720p_14B_fp8_e4m3fn.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "UNETLoader"
+    }
+  },
+  "38": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "CLIPLoader"
+    }
+  },
+  "39": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    },
+    "_meta": {
+      "title": "VAELoader"
+    }
+  },
+  "49": {
+    "class_type": "CLIPVisionLoader",
+    "inputs": {
+      "clip_name": "clip_vision_h.safetensors"
+    },
+    "_meta": {
+      "title": "CLIPVisionLoader"
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "38",
+        0
+      ],
+      "text": "a cute anime girl with massive fennec ears and a big fluffy tail wearing a maid outfit turning around"
+    },
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "54": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": {
+      "model": [
+        "37",
+        0
+      ],
+      "shift": 8
+    },
+    "_meta": {
+      "title": "ModelSamplingSD3"
+    }
+  },
+  "55": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ],
+      "fps": 16
+    },
+    "_meta": {
+      "title": "CreateVideo"
+    }
+  },
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "54",
+        0
+      ],
+      "positive": [
+        "50",
+        0
+      ],
+      "negative": [
+        "50",
+        1
+      ],
+      "latent_image": [
+        "50",
+        2
+      ],
+      "seed": 987948718394761,
+      "steps": "randomize",
+      "cfg": 20,
+      "sampler_name": 6,
+      "scheduler": "uni_pc",
+      "denoise": "simple"
+    },
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAEDecode"
+    }
+  },
+  "56": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "55",
+        0
+      ],
+      "filename_prefix": "video/ComfyUI",
+      "format": "auto",
+      "codec": "auto"
+    },
+    "_meta": {
+      "title": "SaveVideo"
+    }
+  },
+  "50": {
+    "class_type": "WanImageToVideo",
+    "inputs": {
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ],
+      "clip_vision_output": [
+        "51",
+        0
+      ],
+      "start_image": [
+        "52",
+        0
+      ],
+      "width": 512,
+      "height": 512,
+      "length": 33,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "WanImageToVideo"
+    }
+  },
+  "51": {
+    "class_type": "CLIPVisionEncode",
+    "inputs": {
+      "clip_vision": [
+        "49",
+        0
+      ],
+      "image": [
+        "52",
+        0
+      ],
+      "crop": "none"
+    },
+    "_meta": {
+      "title": "CLIPVisionEncode"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "38",
+        0
+      ],
+      "text": "\u00e8\u2030\u00b2\u00e8\u00b0\u0192\u00e8\u2030\u00b3\u00e4\u00b8\u00bd\u00ef\u00bc\u0152\u00e8\u00bf\u2021\u00e6\u203a\u009d\u00ef\u00bc\u0152\u00e9\u009d\u2122\u00e6\u20ac\u0081\u00ef\u00bc\u0152\u00e7\u00bb\u2020\u00e8\u0160\u201a\u00e6\u00a8\u00a1\u00e7\u00b3\u0160\u00e4\u00b8\u008d\u00e6\u00b8\u2026\u00ef\u00bc\u0152\u00e5\u00ad\u2014\u00e5\u00b9\u2022\u00ef\u00bc\u0152\u00e9\u00a3\u017d\u00e6\u00a0\u00bc\u00ef\u00bc\u0152\u00e4\u00bd\u0153\u00e5\u201c\u0081\u00ef\u00bc\u0152\u00e7\u201d\u00bb\u00e4\u00bd\u0153\u00ef\u00bc\u0152\u00e7\u201d\u00bb\u00e9\u009d\u00a2\u00ef\u00bc\u0152\u00e9\u009d\u2122\u00e6\u00ad\u00a2\u00ef\u00bc\u0152\u00e6\u2022\u00b4\u00e4\u00bd\u201c\u00e5\u008f\u2018\u00e7\u0081\u00b0\u00ef\u00bc\u0152\u00e6\u0153\u20ac\u00e5\u00b7\u00ae\u00e8\u00b4\u00a8\u00e9\u2021\u008f\u00ef\u00bc\u0152\u00e4\u00bd\u017d\u00e8\u00b4\u00a8\u00e9\u2021\u008f\u00ef\u00bc\u0152JPEG\u00e5\u017d\u2039\u00e7\u00bc\u00a9\u00e6\u00ae\u2039\u00e7\u2022\u2122\u00ef\u00bc\u0152\u00e4\u00b8\u2018\u00e9\u2122\u2039\u00e7\u0161\u201e\u00ef\u00bc\u0152\u00e6\u00ae\u2039\u00e7\u00bc\u00ba\u00e7\u0161\u201e\u00ef\u00bc\u0152\u00e5\u00a4\u0161\u00e4\u00bd\u2122\u00e7\u0161\u201e\u00e6\u2030\u2039\u00e6\u0152\u2021\u00ef\u00bc\u0152\u00e7\u201d\u00bb\u00e5\u00be\u2014\u00e4\u00b8\u008d\u00e5\u00a5\u00bd\u00e7\u0161\u201e\u00e6\u2030\u2039\u00e9\u0192\u00a8\u00ef\u00bc\u0152\u00e7\u201d\u00bb\u00e5\u00be\u2014\u00e4\u00b8\u008d\u00e5\u00a5\u00bd\u00e7\u0161\u201e\u00e8\u201e\u00b8\u00e9\u0192\u00a8\u00ef\u00bc\u0152\u00e7\u2022\u00b8\u00e5\u00bd\u00a2\u00e7\u0161\u201e\u00ef\u00bc\u0152\u00e6\u00af\u0081\u00e5\u00ae\u00b9\u00e7\u0161\u201e\u00ef\u00bc\u0152\u00e5\u00bd\u00a2\u00e6\u20ac\u0081\u00e7\u2022\u00b8\u00e5\u00bd\u00a2\u00e7\u0161\u201e\u00e8\u201a\u00a2\u00e4\u00bd\u201c\u00ef\u00bc\u0152\u00e6\u2030\u2039\u00e6\u0152\u2021\u00e8\u017e\u008d\u00e5\u0090\u02c6\u00ef\u00bc\u0152\u00e9\u009d\u2122\u00e6\u00ad\u00a2\u00e4\u00b8\u008d\u00e5\u0160\u00a8\u00e7\u0161\u201e\u00e7\u201d\u00bb\u00e9\u009d\u00a2\u00ef\u00bc\u0152\u00e6\u009d\u201a\u00e4\u00b9\u00b1\u00e7\u0161\u201e\u00e8\u0192\u0152\u00e6\u2122\u00af\u00ef\u00bc\u0152\u00e4\u00b8\u2030\u00e6\u009d\u00a1\u00e8\u2026\u00bf\u00ef\u00bc\u0152\u00e8\u0192\u0152\u00e6\u2122\u00af\u00e4\u00ba\u00ba\u00e5\u00be\u02c6\u00e5\u00a4\u0161\u00ef\u00bc\u0152\u00e5\u20ac\u2019\u00e7\u009d\u20ac\u00e8\u00b5\u00b0"
+    },
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "52": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "image_to_video_wan_start_image.png"
+    },
+    "_meta": {
+      "title": "LoadImage"
+    }
+  }
+}

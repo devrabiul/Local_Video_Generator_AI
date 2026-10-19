@@ -1,0 +1,151 @@
+﻿{
+    "1":  {
+              "inputs":  {
+                             "unet_name":  "z_image_turbo_bf16.safetensors",
+                             "weight_dtype":  "default"
+                         },
+              "class_type":  "UNETLoader",
+              "_meta":  {
+                            "title":  "Load Diffusion Model"
+                        }
+          },
+    "2":  {
+              "inputs":  {
+                             "clip_name":  "qwen_3_4b_fp8_mixed.safetensors",
+                             "type":  "lumina2"
+                         },
+              "class_type":  "CLIPLoader",
+              "_meta":  {
+                            "title":  "Load CLIP"
+                        }
+          },
+    "3":  {
+              "inputs":  {
+                             "vae_name":  "ae.safetensors"
+                         },
+              "class_type":  "VAELoader",
+              "_meta":  {
+                            "title":  "Load VAE"
+                        }
+          },
+    "4":  {
+              "inputs":  {
+                             "width":  768,
+                             "height":  1344,
+                             "batch_size":  1
+                         },
+              "class_type":  "EmptyLatentImage",
+              "_meta":  {
+                            "title":  "VF_LATENT"
+                        }
+          },
+    "5":  {
+              "inputs":  {
+                             "text":  "cinematic historical photorealism, the enormous Great Basilica bombard cannon during the 1453 Ottoman siege of Constantinople, a gigantic dark bronze 15th-century siege bombard mounted on a heavy wooden firing platform, cannon firing a massive stone cannonball toward the distant ancient Theodosian city walls, brilliant orange muzzle flash, thick rolling clouds of gunpowder smoke, glowing sparks, dust and debris kicked up by the blast, Ottoman artillery crew in historically inspired 15th-century clothing standing at a safe distance, dramatic stormy sky illuminated by firelight, monumental scale, realistic bronze texture and wooden supports, physically plausible historical artillery, high detail, cinematic 35mm film still, dramatic lighting, vertical composition, no text, no watermark",
+                             "clip":  [
+                                          "2",
+                                          0
+                                      ]
+                         },
+              "class_type":  "CLIPTextEncode",
+              "_meta":  {
+                            "title":  "VF_PROMPT"
+                        }
+          },
+    "6":  {
+              "inputs":  {
+                             "text":  "blurry, low quality, cartoon, modern artillery, modern weapons, futuristic cannon, steel tank, fantasy weapon, impossible cannon shape, people in modern uniforms, gore, distorted faces, extra limbs, text, watermark, logo",
+                             "clip":  [
+                                          "2",
+                                          0
+                                      ]
+                         },
+              "class_type":  "CLIPTextEncode",
+              "_meta":  {
+                            "title":  "VF_NEG"
+                        }
+          },
+    "7":  {
+              "inputs":  {
+                             "seed":  1454,
+                             "steps":  8,
+                             "cfg":  1.0,
+                             "sampler_name":  "euler",
+                             "scheduler":  "simple",
+                             "denoise":  1.0,
+                             "model":  [
+                                           "10",
+                                           0
+                                       ],
+                             "positive":  [
+                                              "5",
+                                              0
+                                          ],
+                             "negative":  [
+                                              "6",
+                                              0
+                                          ],
+                             "latent_image":  [
+                                                  "11",
+                                                  0
+                                              ]
+                         },
+              "class_type":  "KSampler",
+              "_meta":  {
+                            "title":  "VF_SAMPLER"
+                        }
+          },
+    "8":  {
+              "inputs":  {
+                             "samples":  [
+                                             "7",
+                                             0
+                                         ],
+                             "vae":  [
+                                         "3",
+                                         0
+                                     ]
+                         },
+              "class_type":  "VAEDecode",
+              "_meta":  {
+                            "title":  "VAE Decode"
+                        }
+          },
+    "9":  {
+              "inputs":  {
+                             "filename_prefix":  "constantinople_1453/scene_03_great_bombard",
+                             "images":  [
+                                            "8",
+                                            0
+                                        ]
+                         },
+              "class_type":  "SaveImage",
+              "_meta":  {
+                            "title":  "VF_SAVE"
+                        }
+          },
+    "10":  {
+               "class_type":  "ModelSamplingAuraFlow",
+               "inputs":  {
+                              "model":  [
+                                            "1",
+                                            0
+                                        ],
+                              "shift":  3
+                          },
+               "_meta":  {
+                             "title":  "VF_MODEL_SAMPLING"
+                         }
+           },
+    "11":  {
+               "class_type":  "EmptySD3LatentImage",
+               "inputs":  {
+                              "width":  768,
+                              "height":  1344,
+                              "batch_size":  1
+                          },
+               "_meta":  {
+                             "title":  "VF_LATENT"
+                         }
+           }
+}

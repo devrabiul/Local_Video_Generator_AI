@@ -1,0 +1,151 @@
+﻿{
+    "1":  {
+              "inputs":  {
+                             "unet_name":  "z_image_turbo_bf16.safetensors",
+                             "weight_dtype":  "default"
+                         },
+              "class_type":  "UNETLoader",
+              "_meta":  {
+                            "title":  "Load Diffusion Model"
+                        }
+          },
+    "2":  {
+              "inputs":  {
+                             "clip_name":  "qwen_3_4b_fp8_mixed.safetensors",
+                             "type":  "lumina2"
+                         },
+              "class_type":  "CLIPLoader",
+              "_meta":  {
+                            "title":  "Load CLIP"
+                        }
+          },
+    "3":  {
+              "inputs":  {
+                             "vae_name":  "ae.safetensors"
+                         },
+              "class_type":  "VAELoader",
+              "_meta":  {
+                            "title":  "Load VAE"
+                        }
+          },
+    "4":  {
+              "inputs":  {
+                             "width":  768,
+                             "height":  1344,
+                             "batch_size":  1
+                         },
+              "class_type":  "EmptyLatentImage",
+              "_meta":  {
+                            "title":  "VF_LATENT"
+                        }
+          },
+    "5":  {
+              "inputs":  {
+                             "text":  "cinematic historical photorealism, breathtaking sunrise over Constantinople in the aftermath of the siege of 1453, iconic Hagia Sophia rising in majestic silhouette above the ancient city skyline, broad dome and minarets visible in warm golden dawn light, the calm Bosporus in the foreground reflecting soft amber and rose-colored sky, faint morning mist drifting above the water, distant wooden sailing vessels from the 15th century, subtle smoke haze fading over the city, birds gliding across the brightening sky, solemn reflective atmosphere marking the end of the Byzantine era and the dawn of a new age, historically grounded medieval Constantinople architecture, epic historical film closing shot, wide cinematic landscape adapted to vertical 9:16 composition, exquisite atmospheric perspective, natural light, realistic stone textures, restrained gold and deep blue palette, no modern buildings, no text, no watermark",
+                             "clip":  [
+                                          "2",
+                                          0
+                                      ]
+                         },
+              "class_type":  "CLIPTextEncode",
+              "_meta":  {
+                            "title":  "VF_PROMPT"
+                        }
+          },
+    "6":  {
+              "inputs":  {
+                             "text":  "modern Istanbul skyline, modern skyscrapers, contemporary ships, motorboats, modern bridges, electric lights, fantasy castle, futuristic architecture, cartoon, anime, oversaturated colors, blurry, low quality, text, subtitles, watermark, logo",
+                             "clip":  [
+                                          "2",
+                                          0
+                                      ]
+                         },
+              "class_type":  "CLIPTextEncode",
+              "_meta":  {
+                            "title":  "VF_NEG"
+                        }
+          },
+    "7":  {
+              "inputs":  {
+                             "seed":  1458,
+                             "steps":  8,
+                             "cfg":  1.0,
+                             "sampler_name":  "euler",
+                             "scheduler":  "simple",
+                             "denoise":  1.0,
+                             "model":  [
+                                           "10",
+                                           0
+                                       ],
+                             "positive":  [
+                                              "5",
+                                              0
+                                          ],
+                             "negative":  [
+                                              "6",
+                                              0
+                                          ],
+                             "latent_image":  [
+                                                  "11",
+                                                  0
+                                              ]
+                         },
+              "class_type":  "KSampler",
+              "_meta":  {
+                            "title":  "VF_SAMPLER"
+                        }
+          },
+    "8":  {
+              "inputs":  {
+                             "samples":  [
+                                             "7",
+                                             0
+                                         ],
+                             "vae":  [
+                                         "3",
+                                         0
+                                     ]
+                         },
+              "class_type":  "VAEDecode",
+              "_meta":  {
+                            "title":  "VAE Decode"
+                        }
+          },
+    "9":  {
+              "inputs":  {
+                             "filename_prefix":  "constantinople_1453/scene_07_sunrise_hagia_sophia",
+                             "images":  [
+                                            "8",
+                                            0
+                                        ]
+                         },
+              "class_type":  "SaveImage",
+              "_meta":  {
+                            "title":  "VF_SAVE"
+                        }
+          },
+    "10":  {
+               "class_type":  "ModelSamplingAuraFlow",
+               "inputs":  {
+                              "model":  [
+                                            "1",
+                                            0
+                                        ],
+                              "shift":  3
+                          },
+               "_meta":  {
+                             "title":  "VF_MODEL_SAMPLING"
+                         }
+           },
+    "11":  {
+               "class_type":  "EmptySD3LatentImage",
+               "inputs":  {
+                              "width":  768,
+                              "height":  1344,
+                              "batch_size":  1
+                          },
+               "_meta":  {
+                             "title":  "VF_LATENT"
+                         }
+           }
+}

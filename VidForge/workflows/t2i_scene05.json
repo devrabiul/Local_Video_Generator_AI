@@ -1,0 +1,151 @@
+﻿{
+    "1":  {
+              "inputs":  {
+                             "unet_name":  "z_image_turbo_bf16.safetensors",
+                             "weight_dtype":  "default"
+                         },
+              "class_type":  "UNETLoader",
+              "_meta":  {
+                            "title":  "Load Diffusion Model"
+                        }
+          },
+    "2":  {
+              "inputs":  {
+                             "clip_name":  "qwen_3_4b_fp8_mixed.safetensors",
+                             "type":  "lumina2"
+                         },
+              "class_type":  "CLIPLoader",
+              "_meta":  {
+                            "title":  "Load CLIP"
+                        }
+          },
+    "3":  {
+              "inputs":  {
+                             "vae_name":  "ae.safetensors"
+                         },
+              "class_type":  "VAELoader",
+              "_meta":  {
+                            "title":  "Load VAE"
+                        }
+          },
+    "4":  {
+              "inputs":  {
+                             "width":  768,
+                             "height":  1344,
+                             "batch_size":  1
+                         },
+              "class_type":  "EmptyLatentImage",
+              "_meta":  {
+                            "title":  "VF_LATENT"
+                        }
+          },
+    "5":  {
+              "inputs":  {
+                             "text":  "cinematic historical photorealism, Byzantine Emperor Constantine XI Palaiologos, a battle-hardened 49-year-old Byzantine emperor with a rugged noble face and grey-streaked beard, wearing ornate gilded armor with a Byzantine double-headed eagle cuirass and a rich deep purple imperial mantle, standing solemnly inside the vast Hagia Sophia in Constantinople on the eve of the siege in May 1453, rows of flickering beeswax candles illuminating his face and gold details, immense ancient Byzantine columns, dim golden mosaics and shadowy vaulted dome in the background, subtle incense haze, solemn tragic atmosphere, historically grounded 15th-century Byzantine clothing and armor, dignified restrained expression, cinematic chiaroscuro, realistic skin texture, intricate metalwork, dramatic medium portrait, 35mm historical epic film still, vertical 9:16 composition, no text, no watermark",
+                             "clip":  [
+                                          "2",
+                                          0
+                                      ]
+                         },
+              "class_type":  "CLIPTextEncode",
+              "_meta":  {
+                            "title":  "VF_PROMPT"
+                        }
+          },
+    "6":  {
+              "inputs":  {
+                             "text":  "blurry, low quality, cartoon, anime, modern clothing, modern military uniform, firearms, fantasy armor, crown from another era, clean-shaven young face, black beard without grey, incorrect Roman legion armor, sci-fi, oversaturated colors, deformed hands, extra fingers, duplicate person, text, subtitles, watermark, logo",
+                             "clip":  [
+                                          "2",
+                                          0
+                                      ]
+                         },
+              "class_type":  "CLIPTextEncode",
+              "_meta":  {
+                            "title":  "VF_NEG"
+                        }
+          },
+    "7":  {
+              "inputs":  {
+                             "seed":  1456,
+                             "steps":  8,
+                             "cfg":  1.0,
+                             "sampler_name":  "euler",
+                             "scheduler":  "simple",
+                             "denoise":  1.0,
+                             "model":  [
+                                           "10",
+                                           0
+                                       ],
+                             "positive":  [
+                                              "5",
+                                              0
+                                          ],
+                             "negative":  [
+                                              "6",
+                                              0
+                                          ],
+                             "latent_image":  [
+                                                  "11",
+                                                  0
+                                              ]
+                         },
+              "class_type":  "KSampler",
+              "_meta":  {
+                            "title":  "VF_SAMPLER"
+                        }
+          },
+    "8":  {
+              "inputs":  {
+                             "samples":  [
+                                             "7",
+                                             0
+                                         ],
+                             "vae":  [
+                                         "3",
+                                         0
+                                     ]
+                         },
+              "class_type":  "VAEDecode",
+              "_meta":  {
+                            "title":  "VAE Decode"
+                        }
+          },
+    "9":  {
+              "inputs":  {
+                             "filename_prefix":  "constantinople_1453/scene_05_constantine_xi",
+                             "images":  [
+                                            "8",
+                                            0
+                                        ]
+                         },
+              "class_type":  "SaveImage",
+              "_meta":  {
+                            "title":  "VF_SAVE"
+                        }
+          },
+    "10":  {
+               "class_type":  "ModelSamplingAuraFlow",
+               "inputs":  {
+                              "model":  [
+                                            "1",
+                                            0
+                                        ],
+                              "shift":  3
+                          },
+               "_meta":  {
+                             "title":  "VF_MODEL_SAMPLING"
+                         }
+           },
+    "11":  {
+               "class_type":  "EmptySD3LatentImage",
+               "inputs":  {
+                              "width":  768,
+                              "height":  1344,
+                              "batch_size":  1
+                          },
+               "_meta":  {
+                             "title":  "VF_LATENT"
+                         }
+           }
+}

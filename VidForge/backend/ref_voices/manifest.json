@@ -1,0 +1,17 @@
+{
+  "en_nature": {
+    "name": "Nature & Earth (English Deep Male)",
+    "file": "en_nature.wav",
+    "text": "Some call me nature, others call me mother nature."
+  },
+  "bn_epic_male": {
+    "name": "Pradeep Seed (বাংলা গম্ভীর পুরুষ কণ্ঠ)",
+    "file": "bn_epic_male.wav",
+    "text": "প্রাচীন বাংলার ইতিহাস এক গৌরবময় বীরত্ব ও ত্যাগের কাহিনী।"
+  },
+  "bn_soft_female": {
+    "name": "Nabanita Seed (বাংলা সাবলীল নারী কণ্ঠ)",
+    "file": "bn_soft_female.wav",
+    "text": "নদীর কূল ঘেঁষে গড়ে ওঠা এই জনপদের প্রতিটি ধূলিকণায় লুকিয়ে আছে কত না বলা রূপকথা।"
+  }
+}
