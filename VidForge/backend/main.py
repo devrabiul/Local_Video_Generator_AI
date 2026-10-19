@@ -80,7 +80,7 @@ class ChatRequest(BaseModel):
 async def get_system_status():
     ollama_ok = False
     ollama_models = []
-    default_model = "story-writer:latest"
+    default_model = "qwen3.5:9b"
     comfyui_ok = False
 
     async with httpx.AsyncClient(timeout=3.0) as client:
@@ -91,7 +91,9 @@ async def get_system_status():
                 ollama_ok = True
                 data = r.json()
                 ollama_models = [m["name"] for m in data.get("models", [])]
-                if "story-writer:latest" in ollama_models:
+                if "qwen3.5:9b" in ollama_models:
+                    default_model = "qwen3.5:9b"
+                elif "story-writer:latest" in ollama_models:
                     default_model = "story-writer:latest"
                 elif ollama_models:
                     default_model = ollama_models[0]
@@ -219,19 +221,29 @@ async def chat_with_ollama(req: ChatRequest):
         ollama_messages.append({"role": m.role, "content": m.content})
         
     try:
+        await ai_engine.free_gpu_memory(unload_comfy=True, unload_ollama=False)
         async with httpx.AsyncClient(timeout=180.0) as client:
             payload = {
                 "model": req.model,
                 "messages": ollama_messages,
-                "stream": False
+                "stream": False,
+                "keep_alive": "30s"
             }
             res = await client.post(f"{ai_engine.OLLAMA_URL}/api/chat", json=payload)
-            res.raise_for_status()
+            if res.status_code != 200:
+                err_detail = res.text
+                try:
+                    err_detail = res.json().get("error", res.text)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=res.status_code, detail=f"Ollama error: {err_detail}")
             data = res.json()
             return {
                 "message": data["message"]["content"],
                 "model": data.get("model", req.model)
             }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama chat error: {str(e)}")
 

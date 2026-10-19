@@ -347,10 +347,50 @@ def calculate_duration_profile(target_duration: int = 60) -> tuple[int, int, int
     words_per_scene = max(8, int(round(words_target / scene_count)))
     return scene_count, words_target, words_per_scene
 
+async def free_gpu_memory(unload_comfy: bool = True, unload_ollama: bool = False):
+    """Proactively frees VRAM from ComfyUI and/or Ollama to prevent CUDA out-of-memory errors."""
+    if unload_comfy:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                await client.post(f"{COMFYUI_URL}/free", json={"unload_models": True, "free_memory": True})
+                logger.info("Proactively freed ComfyUI VRAM cache")
+        except Exception:
+            pass
+    if unload_ollama:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                r = await client.get(f"{OLLAMA_URL}/api/tags")
+                if r.status_code == 200:
+                    installed = [m["name"] for m in r.json().get("models", [])]
+                    for m in installed:
+                        try:
+                            await client.post(f"{OLLAMA_URL}/api/chat", json={"model": m, "messages": [], "keep_alive": 0})
+                        except Exception:
+                            pass
+                    logger.info("Unloaded idle Ollama models from VRAM")
+        except Exception:
+            pass
+
+def parse_ollama_json(raw_text: str) -> dict:
+    """Robust JSON parser that strips markdown code blocks and extracts root object."""
+    text = raw_text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    start_idx = text.find("{")
+    end_idx = text.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        text = text[start_idx:end_idx + 1]
+    return json.loads(text)
+
 async def generate_story_script(
     topic: str,
     language: str = "bn",
-    model: str = "story-writer:latest",
+    model: str = "qwen3.5:9b",
     genre: str = "historical",
     tone: str = "epic",
     scene_count: int | None = None,
@@ -403,20 +443,65 @@ Respond ONLY with valid JSON in this exact structure:
   ]
 }}"""
 
-    async with httpx.AsyncClient(timeout=240.0) as client:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Topic / Concept:\n{topic}"}
-            ],
-            "stream": False,
-            "format": "json"
-        }
-        res = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
-        res.raise_for_status()
-        content = res.json()["message"]["content"]
-        return json.loads(content)
+    # Free ComfyUI VRAM first so Ollama has full GPU headroom
+    await free_gpu_memory(unload_comfy=True, unload_ollama=False)
+
+    # Determine candidate models to try in order (requested model first, then others)
+    candidate_models = [model] if model else []
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{OLLAMA_URL}/api/tags")
+            if r.status_code == 200:
+                installed = [m["name"] for m in r.json().get("models", [])]
+                for m in ["qwen3.5:9b", "story-writer:latest"] + installed:
+                    if m in installed and m not in candidate_models:
+                        candidate_models.append(m)
+    except Exception:
+        pass
+
+    if not candidate_models:
+        candidate_models = ["qwen3.5:9b", "story-writer:latest"]
+
+    last_error = None
+    for candidate in candidate_models:
+        try:
+            logger.info(f"Generating story script with Ollama model: {candidate}...")
+            async with httpx.AsyncClient(timeout=240.0) as client:
+                payload = {
+                    "model": candidate,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Topic / Concept:\n{topic}"}
+                    ],
+                    "stream": False,
+                    "format": "json",
+                    "keep_alive": "30s"
+                }
+                res = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+                if res.status_code != 200:
+                    err_detail = res.text
+                    try:
+                        err_detail = res.json().get("error", res.text)
+                    except Exception:
+                        pass
+                    logger.warning(f"Ollama model '{candidate}' returned HTTP {res.status_code}: {err_detail}")
+                    # Free memory aggressively before trying next candidate
+                    await free_gpu_memory(unload_comfy=True, unload_ollama=True)
+                    last_error = RuntimeError(f"Ollama error ({candidate}): {err_detail}")
+                    continue
+
+                content = res.json()["message"]["content"]
+                result = parse_ollama_json(content)
+                logger.info(f"Successfully generated script with {candidate} ({len(result.get('scenes', []))} scenes)")
+                # Proactively unload Ollama model so 100% of GPU is ready for ComfyUI / F5-TTS
+                await free_gpu_memory(unload_comfy=False, unload_ollama=True)
+                return result
+        except Exception as e:
+            logger.warning(f"Failed generation with candidate {candidate}: {e}")
+            last_error = e
+            await free_gpu_memory(unload_comfy=True, unload_ollama=True)
+
+    raise RuntimeError(f"Ollama script generation failed: {last_error}")
 
 async def get_active_ollama_model() -> str:
     try:
@@ -424,15 +509,15 @@ async def get_active_ollama_model() -> str:
             r = await client.get(f"{OLLAMA_URL}/api/tags")
             if r.status_code == 200:
                 models = [m["name"] for m in r.json().get("models", [])]
-                if "story-writer:latest" in models:
-                    return "story-writer:latest"
                 if "qwen3.5:9b" in models:
                     return "qwen3.5:9b"
+                if "story-writer:latest" in models:
+                    return "story-writer:latest"
                 if models:
                     return models[0]
     except Exception:
         pass
-    return "story-writer:latest"
+    return "qwen3.5:9b"
 
 async def plan_script(prompt: str, language: str, video_type: str = "story", target_duration: int = 60, model: str = None) -> dict:
     if not model:

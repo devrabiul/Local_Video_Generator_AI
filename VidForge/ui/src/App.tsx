@@ -191,7 +191,7 @@ export default function App() {
   ]);
   const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
-  const [chatModel, setChatModel] = useState<string>("story-writer:latest");
+  const [chatModel, setChatModel] = useState<string>("qwen3.5:9b");
   const [chatPersona, setChatPersona] = useState<string>("film_director");
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
@@ -199,8 +199,8 @@ export default function App() {
   // System & Backend Data
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
     ollama_online: false,
-    models: ["story-writer:latest", "qwen3.5:9b"],
-    default_model: "story-writer:latest",
+    models: ["qwen3.5:9b", "story-writer:latest"],
+    default_model: "qwen3.5:9b",
     comfyui_online: false
   });
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -235,7 +235,7 @@ export default function App() {
   const [dismissedFailedJobIds, setDismissedFailedJobIds] = useState<string[]>([]);
 
   // Ollama Story Studio State
-  const [ollamaModel, setOllamaModel] = useState<string>("story-writer:latest");
+  const [ollamaModel, setOllamaModel] = useState<string>("qwen3.5:9b");
   const [storyTopic, setStoryTopic] = useState("");
   const [storyLang, setStoryLang] = useState<string>("bn");
   const [storyGenre, setStoryGenre] = useState("historical");
