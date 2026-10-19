@@ -153,6 +153,7 @@ export default function App() {
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "16:9">("9:16");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showInspirations, setShowInspirations] = useState(false);
+  const [dismissedFailedJobIds, setDismissedFailedJobIds] = useState<string[]>([]);
 
   // Ollama Story Studio State
   const [ollamaModel, setOllamaModel] = useState<string>("story-writer:latest");
@@ -550,10 +551,20 @@ export default function App() {
     }
   };
 
+  const handleDismissFailed = async (jobId: string) => {
+    setDismissedFailedJobIds(prev => [...prev, jobId]);
+    try {
+      await fetch(`${API_BASE}/api/jobs/${jobId}`, { method: "DELETE" });
+      setJobs(prev => prev.filter(j => j.id !== jobId));
+    } catch (e) {
+      console.error("Delete failed", e);
+    }
+  };
+
   const activeJob = jobs.find(j => j.status !== 'DONE' && j.status !== 'FAILED');
   const queuedJobs = jobs.filter(j => j.status === 'QUEUED' && j.id !== activeJob?.id);
   const completedJobs = jobs.filter(j => j.status === 'DONE');
-  const latestFailedJob = jobs.find(j => j.status === 'FAILED');
+  const latestFailedJob = jobs.find(j => j.status === 'FAILED' && !dismissedFailedJobIds.includes(j.id));
 
   const getStatusBadge = (status: Job['status']) => {
     switch (status) {
@@ -1194,7 +1205,7 @@ export default function App() {
                         </div>
                         <button
                           type="button"
-                          onClick={() => handleDelete(latestFailedJob.id)}
+                          onClick={() => handleDismissFailed(latestFailedJob.id)}
                           style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#fca5a5', padding: '2px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}
                         >
                           Dismiss / Clear
