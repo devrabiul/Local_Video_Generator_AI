@@ -959,8 +959,8 @@ export default function App() {
                 />
 
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 10.5, color: '#94a3b8', background: 'rgba(0,0,0,0.25)', padding: '5px 8px', borderRadius: 6 }}>
-                  <span>📊 আনুমানিক: <strong style={{ color: '#f8fafc' }}>{Math.max(2, Math.round(targetDuration / 14))} টি দৃশ্য</strong></span>
-                  <span>📝 স্ক্রিপ্ট: <strong style={{ color: '#f8fafc' }}>~{Math.round(targetDuration * 1.95)} শব্দ</strong></span>
+                  <span>📊 দৃশ্য সংখ্যা: <strong style={{ color: '#38bdf8' }}>{Math.max(3, Math.min(36, Math.round(targetDuration / 5.2)))} টি দৃশ্য</strong> (প্রতি ~৫ সেকেন্ডে কাট)</span>
+                  <span>📝 স্ক্রিপ্ট: <strong style={{ color: '#f8fafc' }}>~{Math.round(targetDuration * 2.0)} শব্দ</strong></span>
                   <span>🎯 দৈর্ঘ্য রেঞ্জ: <strong style={{ color: '#34d399' }}>{Math.max(10, targetDuration - 10)}s – {targetDuration + 10}s</strong></span>
                 </div>
               </div>

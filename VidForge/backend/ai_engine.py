@@ -335,26 +335,16 @@ VIDEO_TYPES_CONFIG = {
 }
 
 def calculate_duration_profile(target_duration: int = 60) -> tuple[int, int, int]:
-    """Calculates (scene_count, words_target, words_per_scene) based on target duration in seconds"""
+    """Calculates (scene_count, words_target, words_per_scene) for modern high-retention video (cut every 4-6s)"""
     target_sec = max(15, min(600, int(target_duration or 60)))
-    if target_sec <= 35:
-        scene_count = 2
-    elif target_sec <= 65:
-        scene_count = 4
-    elif target_sec <= 100:
-        scene_count = 6
-    elif target_sec <= 140:
-        scene_count = 8  # ~120s / 8 = 15s per scene (e.g. 2-minute video)
-    elif target_sec <= 200:
-        scene_count = 12 # ~180s / 12 = 15s per scene (e.g. 3-minute video)
-    elif target_sec <= 260:
-        scene_count = 16
-    else:
-        scene_count = min(22, max(18, int(round(target_sec / 15))))
     
-    # Average speech: 1.95 words per second
-    words_target = int(target_sec * 1.95)
-    words_per_scene = max(14, int(round(words_target / scene_count)))
+    # Modern audience retention: Scene cut every 4.5 to 5.5 seconds (prevents boredom)
+    sec_per_scene = 5.2
+    scene_count = max(3, min(36, int(round(target_sec / sec_per_scene))))
+    
+    # Average speech: 1.95 - 2.0 words per second
+    words_target = int(target_sec * 2.0)
+    words_per_scene = max(8, int(round(words_target / scene_count)))
     return scene_count, words_target, words_per_scene
 
 async def generate_story_script(
@@ -367,7 +357,7 @@ async def generate_story_script(
     video_type: str = "story",
     target_duration: int = 60
 ) -> dict:
-    """Uses Ollama to generate a structured storyboard script adapted to video_type and target_duration"""
+    """Uses Ollama to generate a structured storyboard script with dynamic high-retention visual cuts"""
     lang_names = {
         "bn": "Bengali (বাংলা)",
         "hi": "Hindi (हिन्दी)",
@@ -386,17 +376,18 @@ Generate a complete, professional, highly engaging video production script with 
 Production Format: {cfg['name']}
 Target Total Video Duration: Approximately {target_duration} seconds (~{target_duration // 60}m {target_duration % 60}s).
 
-Strict Timing & Pacing Constraints:
-- You MUST generate EXACTLY {final_scene_count} scenes.
-- Each scene's spoken narration MUST contain approximately {words_per_scene} words (spoken pacing: ~12-15 seconds per scene).
-- The total spoken narration across all {final_scene_count} scenes MUST be approximately {words_target} words to achieve the {target_duration}s duration.
+Strict Timing & High-Retention Pacing Rules:
+- You MUST generate EXACTLY {final_scene_count} chronological scenes.
+- Visual Pacing: Each scene MUST cut/transition quickly (every ~4 to 6 seconds) to maintain viewer retention and avoid boredom.
+- Narration Length: Each scene's spoken voiceover MUST be punchy and concise, containing approximately {words_per_scene} words (1 vivid sentence in {target_lang}).
+- Total Spoken Words: The total narration across all {final_scene_count} scenes MUST be approximately {words_target} words so the spoken voiceover matches ~{target_duration}s.
 
 Requirements for each scene:
-1. "narration": The spoken voiceover script STRICTLY in {target_lang}.
+1. "narration": Spoken voiceover line STRICTLY in {target_lang} (~{words_per_scene} words).
    Format Guidelines: {cfg['narration_guidelines']}
-2. "visual_prompt": A highly detailed visual description written in English for 8K photorealistic image generation (ComfyUI Z-Image-Turbo).
+2. "visual_prompt": A unique, distinct visual description written in English for 8K photorealistic image generation (ComfyUI Z-Image-Turbo). Vary camera angles, subjects, macro details, and perspectives between scenes!
    Visual Guidelines: {cfg['visual_guidelines']}
-3. "motion_prompt": A camera motion description in English for smooth Ken Burns cinematic panning/zooming (e.g. "slow cinematic push in", "gentle pan right", "dynamic zoom out").
+3. "motion_prompt": A camera motion description in English for smooth Ken Burns cinematic panning/zooming (e.g. "slow cinematic push in", "gentle pan right", "dynamic zoom out", "tilt up").
 
 Respond ONLY with valid JSON in this exact structure:
 {{
