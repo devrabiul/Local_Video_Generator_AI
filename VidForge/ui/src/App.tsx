@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { Fragment, useState, useEffect, useRef } from 'react';
 import { 
   Film, Sparkles, Wand2, Volume2, Video, 
   CheckCircle2, Clock, Trash2, Download, RefreshCw, 
   Tv, Smartphone, Languages, Play, Square, Copy, Check,
   Plus, ArrowRight, BookOpen, Bot, Cpu, AlertTriangle,
-  MessageSquare, Send, User, Key, Zap, ExternalLink
+  MessageSquare, Send, User, Key, Zap, ExternalLink, Mic, Upload, Settings, X, Sun, Moon,
+  Newspaper, Presentation, GraduationCap, Megaphone, Clapperboard, Camera, UserRound, Flame,
+  Plane, Rabbit, Search, type LucideIcon
 } from 'lucide-react';
 
 interface Scene {
@@ -12,6 +14,8 @@ interface Scene {
   narration: string;
   visual_prompt: string;
   motion_prompt?: string;
+  delivery?: string;
+  pause_after?: number;
   duration?: number;
   image?: string;
 }
@@ -60,11 +64,52 @@ const ELEVENLABS_VOICE_LIST = [
   { id: "custom", name: "Custom Voice ID", desc: "Enter your custom ElevenLabs cloned voice ID", gender: "custom" }
 ];
 
-const F5_VOICE_LIST = [
-  { id: "bn_epic_male", name: "Pradeep Seed", desc: "বাংলা গম্ভীর ঐতিহাসিক পুরুষ কণ্ঠ (Local RTX 5070 Ti Clone)", lang: "bn" },
-  { id: "bn_soft_female", name: "Nabanita Seed", desc: "বাংলা সাবলীল আবেগঘন নারী কণ্ঠ (Local RTX 5070 Ti Clone)", lang: "bn" },
-  { id: "en_nature", name: "Nature & Earth", desc: "English Deep Cinematic Male (Local RTX 5070 Ti Clone)", lang: "en" }
+type TtsEngine = "gemini" | "elevenlabs" | "f5tts";
+type KeyProvider = "gemini" | "elevenlabs";
+
+interface F5Voice {
+  id: string;
+  name: string;
+  lang: string;
+  custom: boolean;
+  duration?: number;
+  transcript?: string;
+}
+
+interface TtsEngines {
+  gemini?: { configured: boolean; model: string; voices: Record<string, { name: string; description: string }> };
+  elevenlabs?: { configured: boolean; model: string };
+  f5tts?: { ready: boolean; voices: F5Voice[] };
+}
+
+const ENGINE_OPTIONS: { id: TtsEngine; label: string; sub: string; accent: string }[] = [
+  { id: "gemini", label: "✨ Gemini TTS", sub: "Expressive Studio", accent: "var(--a-purple)" },
+  { id: "elevenlabs", label: "👑 ElevenLabs", sub: "Ultra Human", accent: "var(--a-blue)" },
+  { id: "f5tts", label: "⚡ F5-TTS Clone", sub: "Local · My Voices", accent: "var(--a-sky)" }
 ];
+
+type VideoType =
+  | "story" | "news" | "presentation" | "explainer" | "commercial" | "reel"
+  | "documentary" | "biography" | "motivational" | "travel" | "kids" | "mystery";
+
+// Production types; ids must match VIDEO_TYPES_CONFIG in backend/ai_engine.py
+const VIDEO_TYPES: { id: VideoType; label: string; desc: string; Icon: LucideIcon; music: string }[] = [
+  { id: "story", label: "গল্প / ইতিহাস", desc: "Cinematic Story", Icon: Clapperboard, music: "cinematic_epic" },
+  { id: "news", label: "সংবাদ বুলেটিন", desc: "News & Report", Icon: Newspaper, music: "cinematic_epic" },
+  { id: "documentary", label: "ডকুমেন্টারি", desc: "Nature & World", Icon: Camera, music: "emotional_drama" },
+  { id: "biography", label: "জীবনী", desc: "Life Story", Icon: UserRound, music: "ancient_history" },
+  { id: "explainer", label: "শিক্ষণীয় / টেক", desc: "Explainer", Icon: GraduationCap, music: "ancient_history" },
+  { id: "presentation", label: "প্রেজেন্টেশন", desc: "Project & Pitch", Icon: Presentation, music: "emotional_drama" },
+  { id: "commercial", label: "বিজ্ঞাপন / প্রোমো", desc: "Brand Showcase", Icon: Megaphone, music: "cinematic_epic" },
+  { id: "reel", label: "ভাইরাল রিল", desc: "Social Shorts", Icon: Smartphone, music: "cinematic_epic" },
+  { id: "motivational", label: "মোটিভেশন", desc: "Self-Improvement", Icon: Flame, music: "cinematic_epic" },
+  { id: "travel", label: "ভ্রমণ গাইড", desc: "Travel & Places", Icon: Plane, music: "emotional_drama" },
+  { id: "kids", label: "শিশুতোষ গল্প", desc: "Kids & Moral Tale", Icon: Rabbit, music: "emotional_drama" },
+  { id: "mystery", label: "রহস্য / অমীমাংসিত", desc: "Mystery & Cases", Icon: Search, music: "ancient_history" },
+];
+
+// F5-TTS copies the pacing and emotion of the reference; it clips references beyond ~12s
+const MAX_RECORD_SECONDS = 12;
 
 const FORMAT_INSPIRATIONS: Record<string, Array<{ title: string; lang: string; prompt: string; duration: number }>> = {
   story: [
@@ -144,6 +189,54 @@ const FORMAT_INSPIRATIONS: Record<string, Array<{ title: string; lang: string; p
       duration: 30,
       prompt: "স্মার্টফোন ও পিসির এমন ৩টি গোপন ট্রিকস যা ৯৯% মানুষ জানে না! কীভাবে সেকেন্ডের মধ্যে যেকোনো ডকুমেন্ট স্ক্যান করবেন এবং শর্টকাট দিয়ে কাজের গতি দ্বিগুণ করবেন।"
     }
+  ],
+  documentary: [
+    {
+      title: "সুন্দরবনের রয়েল বেঙ্গল টাইগার",
+      lang: "bn",
+      duration: 120,
+      prompt: "পৃথিবীর বৃহত্তম ম্যানগ্রোভ বন সুন্দরবনে রয়েল বেঙ্গল টাইগারের জীবন। জোয়ার-ভাটার নদী পেরিয়ে সাঁতার, শিকারের কৌশল, লবণাক্ত পানিতে টিকে থাকার রহস্য এবং বিলুপ্তির হুমকি।"
+    }
+  ],
+  biography: [
+    {
+      title: "বেগম রোকেয়া: নারী জাগরণের অগ্রদূত",
+      lang: "bn",
+      duration: 120,
+      prompt: "১৮৮০ সালে রংপুরের পায়রাবন্দে জন্ম। গোপনে ভাইয়ের কাছে লেখাপড়া শেখা, 'সুলতানার স্বপ্ন' রচনা, সাখাওয়াত মেমোরিয়াল গার্লস স্কুল প্রতিষ্ঠা এবং নারী শিক্ষার জন্য আজীবন সংগ্রামের অনুপ্রেরণামূলক জীবনী।"
+    }
+  ],
+  motivational: [
+    {
+      title: "ব্যর্থতা থেকে ঘুরে দাঁড়ানো",
+      lang: "bn",
+      duration: 60,
+      prompt: "বারবার ব্যর্থ হয়ে যারা হাল ছেড়ে দিতে চান তাদের জন্য। থমাস এডিসনের হাজারবার চেষ্টা থেকে শিক্ষা, প্রতিদিন ১% উন্নতির শক্তি এবং আজ থেকেই নতুন করে শুরু করার দৃঢ় আহ্বান।"
+    }
+  ],
+  travel: [
+    {
+      title: "সাজেক ভ্যালি: মেঘের রাজ্যে একদিন",
+      lang: "bn",
+      duration: 90,
+      prompt: "রাঙামাটির সাজেক ভ্যালি ভ্রমণ গাইড। ভোরের মেঘের সমুদ্র, কংলাক পাহাড়ের চূড়া, আদিবাসী সংস্কৃতি ও খাবার, যাওয়ার সেরা সময়, খরচ এবং প্রয়োজনীয় টিপস।"
+    }
+  ],
+  kids: [
+    {
+      title: "খরগোশ ও কচ্ছপের নতুন দৌড়",
+      lang: "bn",
+      duration: 60,
+      prompt: "বনের মাঠে অহংকারী খরগোশ আর ধীর কিন্তু ধৈর্যশীল কচ্ছপের মজার দৌড় প্রতিযোগিতা। বন্ধুদের সাহায্য, পরিশ্রম ও ধৈর্যের জয় — শেষে একটি সুন্দর নৈতিক শিক্ষা।"
+    }
+  ],
+  mystery: [
+    {
+      title: "বারমুডা ট্রায়াঙ্গলের রহস্য",
+      lang: "bn",
+      duration: 120,
+      prompt: "আটলান্টিক মহাসাগরের বারমুডা ট্রায়াঙ্গলে জাহাজ ও বিমান নিখোঁজ হওয়ার রহস্যময় ঘটনা। ফ্লাইট ১৯-এর অন্তর্ধান, বৈজ্ঞানিক ব্যাখ্যা, প্রচলিত তত্ত্ব এবং অমীমাংসিত প্রশ্ন।"
+    }
   ]
 };
 
@@ -153,7 +246,13 @@ const PROMPT_PLACEHOLDERS: Record<string, string> = {
   presentation: "আপনার প্রজেক্ট বা ব্যবসার নাম, মূল সমস্যা, প্রযুক্তিগত আর্কিটেকচার ও সমাধানের পয়েন্টগুলো লিখুন...",
   explainer: "যে জটিল বা শিক্ষণীয় বিষয়টি সহজভাবে ভেঙে বোঝাতে চান তা লিখুন (যেমন: কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে, ব্ল্যাক হোল কী)...",
   commercial: "আপনার পণ্য বা সেবার নাম, প্রধান সুবিধা, বিশেষ অফার ও কাস্টমারদের আকর্ষণ করার মূল পয়েন্ট লিখুন...",
-  reel: "সোশ্যাল মিডিয়ায় ভাইরাল হওয়ার মতো আকর্ষণীয় শর্ট ভিডিও আইডিয়া ও হুক লিখুন..."
+  reel: "সোশ্যাল মিডিয়ায় ভাইরাল হওয়ার মতো আকর্ষণীয় শর্ট ভিডিও আইডিয়া ও হুক লিখুন...",
+  documentary: "প্রকৃতি, প্রাণী বা পৃথিবীর যে বিষয়ের ডকুমেন্টারি বানাতে চান তা লিখুন (যেমন: সুন্দরবনের বাঘ, আমাজন বন, মহাসাগরের গভীরতা)...",
+  biography: "যার জীবনী বানাতে চান তার নাম ও জীবনের মূল ঘটনা, সংগ্রাম ও অর্জনগুলো লিখুন...",
+  motivational: "যে বিষয়ে অনুপ্রেরণা দিতে চান তা লিখুন (যেমন: ব্যর্থতা থেকে ঘুরে দাঁড়ানো, সময়ের মূল্য, স্বপ্ন পূরণ)...",
+  travel: "যে জায়গার ভ্রমণ গাইড বানাতে চান তার নাম ও দেখার মতো স্থান, খাবার, সংস্কৃতি লিখুন...",
+  kids: "শিশুদের জন্য গল্পের চরিত্র, ঘটনা এবং শেষে যে নৈতিক শিক্ষা দিতে চান তা লিখুন...",
+  mystery: "যে রহস্যময় বা অমীমাংসিত ঘটনা নিয়ে ভিডিও বানাতে চান তা লিখুন (যেমন: বারমুডা ট্রায়াঙ্গল, হারানো শহর)..."
 };
 
 const PROMPT_LABELS: Record<string, string> = {
@@ -162,7 +261,13 @@ const PROMPT_LABELS: Record<string, string> = {
   presentation: "প্রজেক্টের মূল বিষয়বস্তু ও বিবরণ (Project Pitch / Tech Demo):",
   explainer: "শিক্ষণীয় বিষয়ের বিবরণ (Explainer / Educational Topic):",
   commercial: "পণ্য বা ব্র্যান্ডের বিবরণ (Commercial / Product Showcase):",
-  reel: "ভাইরাল রিল বা শর্টসের টপিক (Viral Hook & Concept):"
+  reel: "ভাইরাল রিল বা শর্টসের টপিক (Viral Hook & Concept):",
+  documentary: "ডকুমেন্টারির বিষয় (Documentary Subject):",
+  biography: "যার জীবনী (Biography Subject & Key Events):",
+  motivational: "অনুপ্রেরণার বিষয় (Motivational Theme):",
+  travel: "ভ্রমণের গন্তব্য (Travel Destination):",
+  kids: "শিশুতোষ গল্পের ধারণা (Kids Story & Moral):",
+  mystery: "রহস্যের বিবরণ (Mystery / Unsolved Case):"
 };
 
 interface ChatMsg {
@@ -207,31 +312,51 @@ export default function App() {
     comfyui_online: false
   });
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [voices, setVoices] = useState<Record<string, Record<string, string>>>({});
+  const [engines, setEngines] = useState<TtsEngines>({});
 
   // Multi-Engine TTS State
-  const [ttsEngine, setTtsEngine] = useState<"elevenlabs" | "f5tts" | "edge">("elevenlabs");
+  const [ttsEngine, setTtsEngine] = useState<TtsEngine>("gemini");
+  const [geminiVoice, setGeminiVoice] = useState<string>("Charon");
   const [elevenVoice, setElevenVoice] = useState<string>("pNInz6obpgDQGcFmaJgB"); // Adam
   const [elevenCustomId, setElevenCustomId] = useState<string>("");
   const [f5Voice, setF5Voice] = useState<string>("bn_epic_male");
-  const [elevenLabsApiKey, setElevenLabsApiKey] = useState<string>("");
+  const [keyInput, setKeyInput] = useState<string>("");
   const [hasElevenLabsKey, setHasElevenLabsKey] = useState<boolean>(false);
   const [maskedKey, setMaskedKey] = useState<string>("");
-  const [elevenKeyStatus, setElevenKeyStatus] = useState<{ valid?: boolean; message?: string; tier?: string } | null>(null);
+  const [hasGeminiKey, setHasGeminiKey] = useState<boolean>(false);
+  const [geminiMaskedKey, setGeminiMaskedKey] = useState<string>("");
+  const [keyStatus, setKeyStatus] = useState<{ valid?: boolean; message?: string; tier?: string } | null>(null);
   const [isTestingKey, setIsTestingKey] = useState<boolean>(false);
   const [isSavingKey, setIsSavingKey] = useState<boolean>(false);
-  const [showElevenModal, setShowElevenModal] = useState<boolean>(false);
-  const [voiceShowcaseEngineFilter, setVoiceShowcaseEngineFilter] = useState<"all" | "elevenlabs" | "f5tts" | "edge">("all");
+  const [keyModal, setKeyModal] = useState<KeyProvider | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">(() =>
+    document.documentElement.dataset.theme === "light" ? "light" : "dark"
+  );
+  const settingsRef = useRef<HTMLDivElement | null>(null);
+  const [voiceShowcaseEngineFilter, setVoiceShowcaseEngineFilter] = useState<"all" | TtsEngine>("all");
+
+  // My Voices (F5-TTS reference recordings)
+  const [newVoiceName, setNewVoiceName] = useState("");
+  const [newVoiceTranscript, setNewVoiceTranscript] = useState("");
+  const [newVoiceLang, setNewVoiceLang] = useState("bn");
+  const [newVoiceFile, setNewVoiceFile] = useState<File | null>(null);
+  const [newVoiceUrl, setNewVoiceUrl] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const [isSavingVoice, setIsSavingVoice] = useState(false);
+  const [voiceUploadError, setVoiceUploadError] = useState<string | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordTimerRef = useRef<number | null>(null);
   
   // Production Form State
-  const [videoType, setVideoType] = useState<"story" | "news" | "presentation" | "explainer" | "commercial" | "reel">("story");
+  const [videoType, setVideoType] = useState<VideoType>("story");
   const [targetDuration, setTargetDuration] = useState<number>(120); // Default to 2 minutes
   const [motionMode, setMotionMode] = useState<"kenburns" | "wan" | "static">("kenburns");
   const [musicTheme, setMusicTheme] = useState<string>("cinematic_epic");
   const [storyPrompt, setStoryPrompt] = useState("");
   const [title, setTitle] = useState("");
   const [language, setLanguage] = useState<string>("bn");
-  const [voice, setVoice] = useState<string>("bn-BD-PradeepNeural");
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "16:9">("9:16");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showInspirations, setShowInspirations] = useState(false);
@@ -250,6 +375,7 @@ export default function App() {
   // Generated Storyboard State
   const [generatedTitle, setGeneratedTitle] = useState("");
   const [generatedSynopsis, setGeneratedSynopsis] = useState("");
+  const [narratorStyle, setNarratorStyle] = useState("");
   const [generatedScenes, setGeneratedScenes] = useState<Scene[]>([]);
   const [copySuccess, setCopySuccess] = useState(false);
 
@@ -356,15 +482,14 @@ export default function App() {
     }
   };
 
-  const fetchVoices = async () => {
+  const fetchEngines = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/voices`);
+      const res = await fetch(`${API_BASE}/api/tts/engines`);
       if (res.ok) {
-        const data = await res.json();
-        setVoices(data);
+        setEngines(await res.json());
       }
     } catch (e) {
-      console.error("Voices error:", e);
+      console.error("TTS engines error:", e);
     }
   };
 
@@ -375,6 +500,8 @@ export default function App() {
         const data = await res.json();
         setHasElevenLabsKey(data.has_elevenlabs_key);
         setMaskedKey(data.masked_key || "");
+        setHasGeminiKey(data.has_gemini_key);
+        setGeminiMaskedKey(data.gemini_masked_key || "");
         if (data.default_engine) {
           setTtsEngine(data.default_engine);
         }
@@ -384,58 +511,193 @@ export default function App() {
     }
   };
 
-  const handleSaveElevenKey = async () => {
-    if (!elevenLabsApiKey.trim()) return;
+  const openKeyModal = (provider: KeyProvider) => {
+    setKeyInput("");
+    setKeyStatus(null);
+    setKeyModal(provider);
+  };
+
+  // Close the settings popup on Escape or a click outside it (the key dialog stays usable)
+  useEffect(() => {
+    if (!showSettings) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !keyModal) setShowSettings(false); };
+    const onClick = (e: MouseEvent) => {
+      if (!keyModal && settingsRef.current && !settingsRef.current.contains(e.target as Node)) setShowSettings(false);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onClick);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onClick);
+    };
+  }, [showSettings, keyModal]);
+
+  // Apply the theme and remember it for this browser (index.html applies it before first paint)
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("vidforge-theme", theme);
+    } catch {
+      // storage unavailable (private mode); the theme still applies for this visit
+    }
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(t => (t === "dark" ? "light" : "dark"));
+
+  const setDefaultEngine = async (engine: TtsEngine) => {
+    setTtsEngine(engine);
+    try {
+      await fetch(`${API_BASE}/api/tts/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ default_engine: engine })
+      });
+    } catch (e) {
+      console.error("Failed to save default voice engine", e);
+    }
+  };
+
+  const providerName = (provider: KeyProvider) => provider === "gemini" ? "Gemini" : "ElevenLabs";
+
+  const handleSaveKey = async () => {
+    if (!keyModal || !keyInput.trim()) return;
     setIsSavingKey(true);
     try {
+      const field = keyModal === "gemini" ? "gemini_api_key" : "elevenlabs_api_key";
       const res = await fetch(`${API_BASE}/api/tts/config`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ elevenlabs_api_key: elevenLabsApiKey.trim() })
+        body: JSON.stringify({ [field]: keyInput.trim() })
       });
       if (res.ok) {
-        await fetchTtsConfig();
-        setShowElevenModal(false);
-        setElevenKeyStatus({ valid: true, message: "ElevenLabs API Key saved successfully!" });
+        await Promise.all([fetchTtsConfig(), fetchEngines()]);
+        setKeyModal(null);
       }
     } catch {
-      alert("Failed to save ElevenLabs API key");
+      alert(`Failed to save ${providerName(keyModal)} API key`);
     } finally {
       setIsSavingKey(false);
     }
   };
 
-  const handleTestElevenKey = async () => {
-    const keyToTest = elevenLabsApiKey.trim();
-    if (!keyToTest) {
-      alert("Please enter an API key to test");
-      return;
-    }
+  const handleTestKey = async () => {
+    const keyToTest = keyInput.trim();
+    if (!keyModal || !keyToTest) return;
     setIsTestingKey(true);
-    setElevenKeyStatus(null);
+    setKeyStatus(null);
     try {
       const res = await fetch(`${API_BASE}/api/tts/test_key`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: keyToTest })
+        body: JSON.stringify({ api_key: keyToTest, provider: keyModal })
       });
       const data = await res.json();
-      setElevenKeyStatus({
-        valid: data.valid,
-        message: data.message,
-        tier: data.tier
-      });
+      setKeyStatus({ valid: data.valid, message: data.message, tier: data.tier });
     } catch {
-      setElevenKeyStatus({ valid: false, message: "Connection test failed" });
+      setKeyStatus({ valid: false, message: "Connection test failed" });
     } finally {
       setIsTestingKey(false);
     }
   };
 
+  const setVoiceRecording = (blob: Blob, filename: string) => {
+    if (newVoiceUrl) URL.revokeObjectURL(newVoiceUrl);
+    setNewVoiceFile(new File([blob], filename, { type: blob.type }));
+    setNewVoiceUrl(URL.createObjectURL(blob));
+  };
+
+  const startRecording = async () => {
+    setVoiceUploadError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      recorder.onstop = () => {
+        stream.getTracks().forEach(track => track.stop());
+        if (recordTimerRef.current) window.clearInterval(recordTimerRef.current);
+        const mime = recorder.mimeType || "audio/webm";
+        setVoiceRecording(new Blob(chunks, { type: mime }), mime.includes("mp4") ? "recording.m4a" : "recording.webm");
+        setIsRecording(false);
+      };
+      recorderRef.current = recorder;
+      recorder.start();
+      setRecordSeconds(0);
+      setIsRecording(true);
+      recordTimerRef.current = window.setInterval(() => setRecordSeconds(sec => sec + 1), 1000);
+    } catch {
+      setVoiceUploadError("Microphone access was blocked. Allow it in your browser, or upload a recording instead.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+  };
+
+  useEffect(() => {
+    if (isRecording && recordSeconds >= MAX_RECORD_SECONDS) stopRecording();
+  }, [isRecording, recordSeconds]);
+
+  const handleSaveCustomVoice = async () => {
+    if (!newVoiceFile || !newVoiceName.trim() || !newVoiceTranscript.trim()) return;
+    setIsSavingVoice(true);
+    setVoiceUploadError(null);
+    try {
+      const form = new FormData();
+      form.append("name", newVoiceName.trim());
+      form.append("transcript", newVoiceTranscript.trim());
+      form.append("language", newVoiceLang);
+      form.append("file", newVoiceFile);
+      const res = await fetch(`${API_BASE}/api/voices/custom`, { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) {
+        setVoiceUploadError(data.detail || "Could not save this voice");
+        return;
+      }
+      await fetchEngines();
+      setTtsEngine("f5tts");
+      setF5Voice(data.id);
+      setNewVoiceName("");
+      setNewVoiceTranscript("");
+      setNewVoiceFile(null);
+      if (newVoiceUrl) URL.revokeObjectURL(newVoiceUrl);
+      setNewVoiceUrl(null);
+    } catch {
+      setVoiceUploadError("Upload failed. Is the VidForge backend running?");
+    } finally {
+      setIsSavingVoice(false);
+    }
+  };
+
+  const handleDeleteCustomVoice = async (voiceId: string, voiceName: string) => {
+    if (!confirm(`Delete your voice "${voiceName}"? The recording is removed from this computer.`)) return;
+    try {
+      await fetch(`${API_BASE}/api/voices/custom/${voiceId}`, { method: "DELETE" });
+      await fetchEngines();
+    } catch (e) {
+      console.error("Delete voice failed", e);
+    }
+  };
+
+  const geminiVoiceEntries = Object.entries(engines.gemini?.voices || {});
+  const f5Voices = engines.f5tts?.voices || [];
+
+  // Keep the F5 selection valid after a custom voice is deleted
+  useEffect(() => {
+    if (f5Voices.length > 0 && !f5Voices.some(v => v.id === f5Voice)) setF5Voice(f5Voices[0].id);
+  }, [f5Voices, f5Voice]);
+
+  const selectedVoiceId = () => {
+    if (ttsEngine === "elevenlabs") {
+      return elevenVoice === "custom" ? (elevenCustomId.trim() || "pNInz6obpgDQGcFmaJgB") : elevenVoice;
+    }
+    return ttsEngine === "f5tts" ? f5Voice : geminiVoice;
+  };
+
   useEffect(() => {
     fetchStatus();
     fetchJobs();
-    fetchVoices();
+    fetchEngines();
     fetchTtsConfig();
     const interval = setInterval(() => {
       fetchJobs();
@@ -449,13 +711,6 @@ export default function App() {
   useEffect(() => {
     if (!wanAvailable && motionMode === 'wan') setMotionMode('kenburns');
   }, [wanAvailable, motionMode]);
-
-  // Update default voice when language changes (for Edge-TTS)
-  useEffect(() => {
-    if (language === "bn") setVoice("bn-BD-PradeepNeural");
-    else if (language === "hi") setVoice("hi-IN-MadhurNeural");
-    else if (language === "en") setVoice("en-US-ChristopherNeural");
-  }, [language]);
 
   // Audio Voice Preview Player
   const playVoiceSample = async (vId: string, engineOverride?: string) => {
@@ -477,7 +732,7 @@ export default function App() {
 
     setLoadingVoice(playKey);
     try {
-      const res = await fetch(`${API_BASE}/api/voices/preview?voice=${encodeURIComponent(vId)}&engine=${eng}`);
+      const res = await fetch(`${API_BASE}/api/voices/preview?voice=${encodeURIComponent(vId)}&engine=${eng}&language=${language}`);
       if (res.ok) {
         const data = await res.json();
         const audioUrl = `${API_BASE}${data.url}?t=${Date.now()}`;
@@ -502,17 +757,132 @@ export default function App() {
     }
   };
 
+  const renderPreviewButton = (vId: string, engine: TtsEngine, accent: string) => {
+    const playKey = `${engine}:${vId}`;
+    const isPlaying = playingVoice === playKey;
+    const isLoading = loadingVoice === playKey;
+    return (
+      <button
+        type="button"
+        onClick={() => playVoiceSample(vId, engine)}
+        disabled={isLoading}
+        style={{ background: isPlaying ? '#ef4444' : 'var(--line-soft)', color: isPlaying ? '#fff' : accent, border: `1px solid color-mix(in srgb, ${accent} 40%, transparent)`, padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}
+      >
+        {isPlaying ? <Square size={10} /> : <Play size={10} />}
+        {isPlaying ? 'Stop' : (isLoading ? 'Generating...' : '🔊 Test Voice')}
+      </button>
+    );
+  };
+
+  const renderKeyWarning = (provider: KeyProvider) => (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgb(234 179 8 / calc(0.12 * var(--tint)))', border: '1px solid rgb(234 179 8 / calc(0.3 * var(--tint)))', padding: '8px 12px', borderRadius: 8, marginBottom: 10 }}>
+      <span style={{ fontSize: 11, color: 'var(--a-yellow)', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <AlertTriangle size={13} /> {providerName(provider)} API Key প্রয়োজন
+      </span>
+      <button
+        type="button"
+        onClick={() => openKeyModal(provider)}
+        style={{ background: '#ca8a04', color: '#000', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700 }}
+      >
+        Set Key
+      </button>
+    </div>
+  );
+
+  const renderKeyBanner = (provider: KeyProvider) => {
+    const hasKey = provider === "gemini" ? hasGeminiKey : hasElevenLabsKey;
+    const masked = provider === "gemini" ? geminiMaskedKey : maskedKey;
+    const model = provider === "gemini" ? engines.gemini?.model : engines.elevenlabs?.model;
+    return (
+      <div className={`key-banner ${hasKey ? 'ok' : 'warn'}`}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          <span className="key-banner-icon"><Key size={16} /></span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--t-strong)' }}>
+              {providerName(provider)} API · {hasKey ? `Connected (${masked})` : 'Key not configured'}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--t-muted)' }}>
+              {hasKey
+                ? `Model ${model || ''} — scene-by-scene emotion, whispers and pauses are active.`
+                : `${providerName(provider)} API key যোগ করুন আবেগপূর্ণ, মানুষের মতো স্বাভাবিক কণ্ঠ তৈরি করতে।`}
+            </div>
+          </div>
+        </div>
+        <button type="button" className={`btn ${hasKey ? 'btn-ghost' : 'btn-primary'}`} onClick={() => openKeyModal(provider)}>
+          <Key size={13} /> {hasKey ? 'Manage key' : `Set ${providerName(provider)} key`}
+        </button>
+      </div>
+    );
+  };
+
+  const renderVoiceCard = (card: { engine: TtsEngine; id: string; name: string; desc: string; badge: string; mine?: boolean; previewable?: boolean; onDelete?: () => void }) => {
+    const isSelected = ttsEngine === card.engine && selectedVoiceId() === card.id;
+    const playKey = `${card.engine}:${card.id}`;
+    const isPlaying = playingVoice === playKey;
+    const isLoading = loadingVoice === playKey;
+    const selectVoice = () => {
+      setTtsEngine(card.engine);
+      if (card.engine === 'gemini') setGeminiVoice(card.id);
+      else if (card.engine === 'elevenlabs') setElevenVoice(card.id);
+      else setF5Voice(card.id);
+      switchTab("production");
+    };
+
+    return (
+      <div key={playKey} className={`voice-card ${isSelected ? 'active' : ''}`}>
+        <div className="voice-card-top">
+          <span className={`voice-avatar ${card.mine ? 'mine' : ''}`} aria-hidden="true">
+            {card.name.trim().charAt(0).toUpperCase()}
+          </span>
+          <div className="voice-card-id">
+            <h4>{card.name}</h4>
+            <span>{card.badge}</span>
+          </div>
+          {isSelected && (
+            <span className="voice-active-tag"><CheckCircle2 size={12} /> Active</span>
+          )}
+        </div>
+
+        <p className="voice-desc" title={card.desc}>{card.desc}</p>
+
+        <div className="voice-card-actions">
+          {card.previewable === false ? (
+            <span className="voice-note">Enter the ID in the production form</span>
+          ) : (
+            <button
+              type="button"
+              className={`btn ${isPlaying ? 'btn-secondary' : 'btn-ghost'}`}
+              onClick={() => playVoiceSample(card.id, card.engine)}
+              disabled={isLoading}
+              style={{ flex: 1 }}
+            >
+              {isPlaying ? <Square size={12} /> : <Play size={12} />}
+              {isPlaying ? 'Stop' : (isLoading ? 'Generating...' : 'Listen')}
+            </button>
+          )}
+          {card.onDelete && (
+            <button type="button" className="btn btn-icon btn-danger-ghost" onClick={card.onDelete} title="Delete this voice" aria-label={`Delete ${card.name}`}>
+              <Trash2 size={13} />
+            </button>
+          )}
+          <button
+            type="button"
+            className={`btn ${isSelected ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={selectVoice}
+          >
+            {isSelected ? <><Check size={13} /> Selected</> : 'Use voice'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   // Submit standard production job
   const handleProductionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!storyPrompt.trim()) return;
 
-    let selectedVoice = voice;
-    if (ttsEngine === "elevenlabs") {
-      selectedVoice = elevenVoice === "custom" ? (elevenCustomId.trim() || "pNInz6obpgDQGcFmaJgB") : elevenVoice;
-    } else if (ttsEngine === "f5tts") {
-      selectedVoice = f5Voice;
-    }
+    const selectedVoice = selectedVoiceId();
 
     setIsSubmitting(true);
     try {
@@ -576,6 +946,7 @@ export default function App() {
       setGeneratedTitle(data.title || "Untitled Epic");
       setGeneratedSynopsis(data.synopsis || "");
       setGeneratedScenes(data.scenes || []);
+      setNarratorStyle(data.narrator_style || "");
     } catch (err: any) {
       setStoryError(err.message || "Failed to generate story with Ollama");
     } finally {
@@ -587,12 +958,7 @@ export default function App() {
   const handleSendStoryToProduction = async () => {
     if (generatedScenes.length === 0) return;
 
-    let selectedVoice = voice;
-    if (ttsEngine === "elevenlabs") {
-      selectedVoice = elevenVoice === "custom" ? (elevenCustomId.trim() || "pNInz6obpgDQGcFmaJgB") : elevenVoice;
-    } else if (ttsEngine === "f5tts") {
-      selectedVoice = f5Voice;
-    }
+    const selectedVoice = selectedVoiceId();
 
     setIsSubmitting(true);
     try {
@@ -607,6 +973,7 @@ export default function App() {
           tts_engine: ttsEngine,
           aspect_ratio: aspectRatio,
           scenes: generatedScenes,
+          narrator_style: narratorStyle,
           video_type: videoType,
           target_duration: targetDuration,
           motion_mode: motionMode,
@@ -629,7 +996,7 @@ export default function App() {
   const handleCopyScript = () => {
     if (generatedScenes.length === 0) return;
     const fullScript = `🎬 ${generatedTitle}\n📖 ${generatedSynopsis}\n\n` + 
-      generatedScenes.map((sc, i) => `[দৃশ্য ${i + 1}]\nভয়েসওভার: ${sc.narration}\nচিত্রায়ন: ${sc.visual_prompt}\nমোশন: ${sc.motion_prompt || 'N/A'}`).join("\n\n");
+      generatedScenes.map((sc, i) => `[দৃশ্য ${i + 1}]\nভয়েসওভার: ${sc.narration}\nডেলিভারি: ${sc.delivery || 'N/A'}\nচিত্রায়ন: ${sc.visual_prompt}\nমোশন: ${sc.motion_prompt || 'N/A'}`).join("\n\n");
     
     navigator.clipboard.writeText(fullScript);
     setCopySuccess(true);
@@ -667,23 +1034,23 @@ export default function App() {
   const getStatusBadge = (status: Job['status']) => {
     switch (status) {
       case 'QUEUED':
-        return <span style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(245, 158, 11, 0.3)' }}>Waiting in Queue</span>;
+        return <span style={{ background: 'rgb(245 158 11 / calc(0.15 * var(--tint)))', color: 'var(--a-amber)', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgb(245 158 11 / calc(0.3 * var(--tint)))' }}>Waiting in Queue</span>;
       case 'SCRIPTING':
-        return <span style={{ background: 'rgba(56, 189, 248, 0.18)', color: '#38bdf8', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(56, 189, 248, 0.35)' }}>Scripting (AI)</span>;
+        return <span style={{ background: 'rgb(56 189 248 / calc(0.18 * var(--tint)))', color: 'var(--a-sky)', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgb(56 189 248 / calc(0.35 * var(--tint)))' }}>Scripting (AI)</span>;
       case 'VOICEOVER':
-        return <span style={{ background: 'rgba(168, 85, 247, 0.18)', color: '#c084fc', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(168, 85, 247, 0.35)' }}>Voiceover</span>;
+        return <span style={{ background: 'rgb(168 85 247 / calc(0.18 * var(--tint)))', color: 'var(--a-purple)', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgb(168 85 247 / calc(0.35 * var(--tint)))' }}>Voiceover</span>;
       case 'GENERATING_IMAGES':
-        return <span style={{ background: 'rgba(6, 182, 212, 0.18)', color: '#22d3ee', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(6, 182, 212, 0.35)' }}>Rendering Visuals</span>;
+        return <span style={{ background: 'rgb(6 182 212 / calc(0.18 * var(--tint)))', color: 'var(--a-cyan)', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgb(6 182 212 / calc(0.35 * var(--tint)))' }}>Rendering Visuals</span>;
       case 'ANIMATING_VIDEO':
-        return <span style={{ background: 'rgba(59, 130, 246, 0.18)', color: '#60a5fa', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(59, 130, 246, 0.35)' }}>Animating Motion</span>;
+        return <span style={{ background: 'rgb(59 130 246 / calc(0.18 * var(--tint)))', color: 'var(--a-blue)', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgb(59 130 246 / calc(0.35 * var(--tint)))' }}>Animating Motion</span>;
       case 'COMPOSING':
-        return <span style={{ background: 'rgba(99, 102, 241, 0.18)', color: '#818cf8', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(99, 102, 241, 0.35)' }}>Mastering Video</span>;
+        return <span style={{ background: 'rgb(99 102 241 / calc(0.18 * var(--tint)))', color: 'var(--a-indigo)', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgb(99 102 241 / calc(0.35 * var(--tint)))' }}>Mastering Video</span>;
       case 'DONE':
-        return <span style={{ background: 'rgba(16, 185, 129, 0.18)', color: '#34d399', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(16, 185, 129, 0.3)' }}>Completed</span>;
+        return <span style={{ background: 'rgb(16 185 129 / calc(0.18 * var(--tint)))', color: 'var(--a-green)', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgb(16 185 129 / calc(0.3 * var(--tint)))' }}>Completed</span>;
       case 'FAILED':
-        return <span style={{ background: 'rgba(239, 68, 68, 0.18)', color: '#f87171', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(239, 68, 68, 0.3)' }}>Failed</span>;
+        return <span style={{ background: 'rgb(239 68 68 / calc(0.18 * var(--tint)))', color: 'var(--a-red)', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgb(239 68 68 / calc(0.3 * var(--tint)))' }}>Failed</span>;
       default:
-        return <span style={{ background: 'rgba(59, 130, 246, 0.18)', color: '#60a5fa', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgba(59, 130, 246, 0.35)' }}>Processing...</span>;
+        return <span style={{ background: 'rgb(59 130 246 / calc(0.18 * var(--tint)))', color: 'var(--a-blue)', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, border: '1px solid rgb(59 130 246 / calc(0.35 * var(--tint)))' }}>Processing...</span>;
     }
   };
 
@@ -692,196 +1059,66 @@ export default function App() {
       
       {/* Premium Glassmorphic Sticky Top Navbar (Single Slim Row) */}
       <header className="studio-header">
-        {/* Brand Left (Compact Single Row) */}
-        <div className="studio-brand">
-          <a href="/" title="Go to home page" aria-label="VidForge AI Studio home" style={{ display: 'flex' }}>
-            <div className="brand-logo-badge">
-              <Film size={17} color="#ffffff" />
-              <div style={{ position: 'absolute', bottom: -2, right: -2, width: 10, height: 10, borderRadius: '50%', background: '#10b981', border: '1.5px solid #0b101e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Sparkles size={6} color="#000" />
-              </div>
-            </div>
-          </a>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <h1 className="brand-title">
-              <a href="/" title="Go to home page" style={{ color: 'inherit', textDecoration: 'none' }}>
-                VidForge <span style={{ fontSize: 11, letterSpacing: '0.12em', color: '#38bdf8', fontWeight: 800 }}>AI STUDIO</span>
-              </a>
-            </h1>
-            <span className="brand-badge">PRO v2.5</span>
-          </div>
-          <div className="brand-subtitle-inline">
-            <span className="brand-subtitle-tag">⚡ RTX 5070 Ti</span>
-            <span className="brand-subtitle-tag">👑 ElevenLabs</span>
-            <span className="brand-subtitle-tag">⚡ F5-TTS</span>
-            <span className="brand-subtitle-tag">🎬 Wan 2.1</span>
-          </div>
+        {/* Brand (left) */}
+        <a href="/" className="studio-brand" title="Go to home page" aria-label="VidForge AI Studio home">
+          <span className="brand-logo-badge">
+            <Film size={16} color="#ffffff" />
+          </span>
+          <h1 className="brand-title">
+            VidForge <span className="brand-title-accent">AI Studio</span>
+          </h1>
+          <span className="brand-badge">PRO v2.5</span>
+        </a>
+
+        {/* Engine stack (center) */}
+        <div className="header-stack" aria-label="Active engines">
+          <span className="header-stack-item"><span className="header-stack-dot" />RTX 5070 Ti</span>
+          <span className="header-stack-item"><span className="header-stack-dot" />Gemini TTS</span>
+          <span className="header-stack-item"><span className="header-stack-dot" />F5-TTS</span>
+          <span className="header-stack-item"><span className="header-stack-dot" />Wan 2.1</span>
         </div>
 
-        {/* Engine Status Dock Right (Compact Chips) */}
-        <div className="engine-status-dock">
-          {/* ElevenLabs Capsule */}
-          <div
-            className="status-capsule clickable"
-            onClick={() => setShowElevenModal(true)}
-            title="ElevenLabs API Key Configuration"
-            style={{
-              borderColor: hasElevenLabsKey ? 'rgba(16, 185, 129, 0.35)' : 'rgba(234, 179, 8, 0.35)',
-              background: hasElevenLabsKey ? 'rgba(16, 185, 129, 0.1)' : 'rgba(234, 179, 8, 0.1)'
-            }}
-          >
-            <Key size={13} color={hasElevenLabsKey ? '#34d399' : '#facc15'} />
-            <span style={{ fontSize: 11, color: '#94a3b8' }}>Eleven:</span>
-            <span style={{ fontSize: 11.5, fontWeight: 700, color: hasElevenLabsKey ? '#34d399' : '#facc15' }}>
-              {hasElevenLabsKey ? (maskedKey || 'Active') : 'Set Key'}
-            </span>
-          </div>
-
-          {/* F5-TTS Capsule */}
-          <div className="status-capsule" style={{ borderColor: 'rgba(56, 189, 248, 0.3)', background: 'rgba(56, 189, 248, 0.08)' }}>
-            <Zap size={13} color="#38bdf8" />
-            <span style={{ fontSize: 11, color: '#94a3b8' }}>F5-TTS:</span>
-            <span style={{ fontSize: 11.5, fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span className="pulse-dot" style={{ width: 5, height: 5, borderRadius: '50%', background: '#38bdf8' }} />
-              RTX 5070 Ti
-            </span>
-          </div>
-
-          {/* Ollama LLM Capsule */}
-          <div className="status-capsule" style={{ borderColor: systemStatus.ollama_online ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)' }}>
-            <Bot size={13} color={systemStatus.ollama_online ? '#34d399' : '#ef4444'} />
-            <span style={{ fontSize: 11, color: '#94a3b8' }}>Story:</span>
-            <span style={{ fontSize: 11.5, fontWeight: 700, color: systemStatus.ollama_online ? '#f8fafc' : '#ef4444', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span className={systemStatus.ollama_online ? "pulse-dot" : ""} style={{ width: 5, height: 5, borderRadius: '50%', background: systemStatus.ollama_online ? '#10b981' : '#ef4444' }} />
-              {systemStatus.ollama_online ? (ollamaModel || 'Online') : 'Offline'}
-            </span>
-          </div>
-
-          {/* ComfyUI Capsule */}
-          <div className="status-capsule" style={{ borderColor: systemStatus.comfyui_online ? 'rgba(6, 182, 212, 0.25)' : 'rgba(239, 68, 68, 0.25)' }}>
-            <Cpu size={13} color={systemStatus.comfyui_online ? '#06b6d4' : '#ef4444'} />
-            <span style={{ fontSize: 11, color: '#94a3b8' }}>Video:</span>
-            <span style={{ fontSize: 11.5, fontWeight: 700, color: systemStatus.comfyui_online ? '#f8fafc' : '#ef4444', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span className={systemStatus.comfyui_online ? "pulse-dot" : ""} style={{ width: 5, height: 5, borderRadius: '50%', background: systemStatus.comfyui_online ? '#06b6d4' : '#ef4444' }} />
-              {systemStatus.comfyui_online ? 'Port 8188' : 'Offline'}
-            </span>
-          </div>
-
-          {/* Live Running Task Capsule */}
-          {runningJobs.length > 0 && (
-            <div className="status-capsule" style={{ borderColor: 'rgba(59, 130, 246, 0.4)', background: 'rgba(59, 130, 246, 0.12)' }}>
-              <div className="pulse-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: '#60a5fa' }} />
-              <span style={{ fontSize: 11, color: '#93c5fd' }}>Running:</span>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: '#60a5fa' }}>{runningJobs[0].progress}%</span>
-            </div>
-          )}
-
-          {/* Live Waiting Queue Capsule */}
-          {queuedJobs.length > 0 && (
-            <div className="status-capsule" style={{ borderColor: 'rgba(245, 158, 11, 0.4)', background: 'rgba(245, 158, 11, 0.12)' }}>
-              <Clock size={12} color="#fbbf24" />
-              <span style={{ fontSize: 11, color: '#fde68a' }}>Queue:</span>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: '#f59e0b' }}>{queuedJobs.length} Waiting</span>
-            </div>
-          )}
-
-          {/* Refresh Action Button */}
-          <button
-            type="button"
-            className="refresh-action-btn"
-            onClick={() => { fetchJobs(); fetchStatus(); fetchTtsConfig(); }}
-            title="Refresh Status & Jobs"
-          >
-            <RefreshCw size={13} />
-          </button>
-        </div>
+        <button
+          type="button"
+          className="theme-toggle"
+          onClick={toggleTheme}
+          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          title={theme === "dark" ? "Light mode" : "Dark mode"}
+        >
+          {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+        </button>
       </header>
 
-      {/* Floating Vertical Navigation Dock (Right Side) */}
-      <aside className="floating-tabs-dock" aria-label="Studio Navigation">
-        {/* Tab 1: Video Production */}
-        <button
-          type="button"
-          className={`floating-tab-btn ${activeTab === 'production' ? 'active' : ''}`}
-          onClick={() => switchTab('production')}
-          aria-label="Video Production"
-        >
-          <Film size={20} />
-          {activeTab === 'production' && <span className="floating-active-pip" />}
-          <div className="floating-tab-tooltip">
-            <span className="tooltip-icon">🎬</span>
-            <span className="tooltip-title">Video Production</span>
-          </div>
-        </button>
-
-        {/* Tab 2: Ollama AI Chat (ChatGPT) */}
-        <button
-          type="button"
-          className={`floating-tab-btn ${activeTab === 'chat' ? 'active' : ''}`}
-          onClick={() => switchTab('chat')}
-          aria-label="Ollama AI Chat"
-        >
-          <MessageSquare size={20} color={activeTab === 'chat' ? '#38bdf8' : '#60a5fa'} />
-          <span className="floating-mini-badge">AI</span>
-          {activeTab === 'chat' && <span className="floating-active-pip" />}
-          <div className="floating-tab-tooltip">
-            <span className="tooltip-icon">💬</span>
-            <span className="tooltip-title">Ollama AI Chat</span>
-            <span className="tooltip-badge">ChatGPT Mode</span>
-          </div>
-        </button>
-
-        {/* Tab 3: Story & Script Studio */}
-        <button
-          type="button"
-          className={`floating-tab-btn ${activeTab === 'ollama' ? 'active' : ''}`}
-          onClick={() => switchTab('ollama')}
-          aria-label="Story & Script Studio"
-        >
-          <Wand2 size={20} color={activeTab === 'ollama' ? '#38bdf8' : '#93c5fd'} />
-          {activeTab === 'ollama' && <span className="floating-active-pip" />}
-          <div className="floating-tab-tooltip">
-            <span className="tooltip-icon">✍️</span>
-            <span className="tooltip-title">Story & Script Studio</span>
-            <span className="tooltip-sub">Director Lab</span>
-          </div>
-        </button>
-
-        {/* Tab 4: Voice Artists Showcase */}
-        <button
-          type="button"
-          className={`floating-tab-btn ${activeTab === 'voices' ? 'active' : ''}`}
-          onClick={() => switchTab('voices')}
-          aria-label="Voice Artist Showcase"
-        >
-          <Volume2 size={20} color={activeTab === 'voices' ? '#38bdf8' : '#38bdf8'} />
-          {activeTab === 'voices' && <span className="floating-active-pip" />}
-          <div className="floating-tab-tooltip">
-            <span className="tooltip-icon">🎙️</span>
-            <span className="tooltip-title">Voice Artists</span>
-            <span className="tooltip-badge-gold">F5 & Eleven</span>
-          </div>
-        </button>
-
-        {/* Tab 5: Video Gallery */}
-        <button
-          type="button"
-          className={`floating-tab-btn ${activeTab === 'gallery' ? 'active' : ''}`}
-          onClick={() => switchTab('gallery')}
-          aria-label="Video Gallery"
-        >
-          <Video size={20} color={activeTab === 'gallery' ? '#38bdf8' : '#34d399'} />
-          {completedJobs.length > 0 && (
-            <span className="floating-count-badge">{completedJobs.length}</span>
-          )}
-          {activeTab === 'gallery' && <span className="floating-active-pip" />}
-          <div className="floating-tab-tooltip">
-            <span className="tooltip-icon">🎞️</span>
-            <span className="tooltip-title">Video Gallery</span>
-            <span className="tooltip-count">{completedJobs.length} Ready</span>
-          </div>
-        </button>
-      </aside>
+      {/* Floating Vertical Navigation Dock (Left Side) */}
+      <nav className="floating-tabs-dock" aria-label="Studio Navigation">
+        {([
+          { id: 'production', label: 'Video Production', meta: null, Icon: Film },
+          { id: 'chat', label: 'Ollama AI Chat', meta: 'ChatGPT mode', Icon: MessageSquare },
+          { id: 'ollama', label: 'Story & Script Studio', meta: 'Director Lab', Icon: Wand2 },
+          { id: 'voices', label: 'Voice Artists', meta: 'F5 & Eleven', Icon: Volume2 },
+          { id: 'gallery', label: 'Video Gallery', meta: `${completedJobs.length} ready`, Icon: Video },
+        ] as const).map(({ id, label, meta, Icon }, i) => (
+          <Fragment key={id}>
+            {i === 4 && <span className="floating-dock-divider" aria-hidden="true" />}
+            <button
+              type="button"
+              className={`floating-tab-btn ${activeTab === id ? 'active' : ''}`}
+              onClick={() => switchTab(id)}
+              aria-label={label}
+              aria-current={activeTab === id ? 'page' : undefined}
+            >
+              <Icon size={19} strokeWidth={activeTab === id ? 2.2 : 1.8} />
+              {id === 'gallery' && completedJobs.length > 0 && (
+                <span className="floating-count-badge">{completedJobs.length}</span>
+              )}
+              <span className="floating-tab-tooltip" role="tooltip">
+                <span className="tooltip-title">{label}</span>
+                {meta && <span className="tooltip-sub">{meta}</span>}
+              </span>
+            </button>
+          </Fragment>
+        ))}
+      </nav>
 
       {/* Main Tab Viewport - Zero-blink persistent panels */}
       <main className="tab-viewport">
@@ -890,125 +1127,114 @@ export default function App() {
         {/* TAB 1: PRODUCTION STUDIO                                                  */}
         {/* ========================================================================= */}
         <div className={`tab-pane ${activeTab === 'production' ? 'active' : ''}`}>
-          <div style={{ display: 'grid', gridTemplateColumns: '460px 1fr', gap: 26, alignItems: 'start' }}>
+          <div className="production-layout">
             
             {/* Creator Form */}
             <section className="glass-panel" style={{ padding: 24 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <Sparkles size={18} color="#60a5fa" />
+                  <Sparkles size={18} color="var(--a-blue)" />
                   <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>Fast Video Production</h2>
                 </div>
                 <button
                   type="button"
                   onClick={() => switchTab("ollama")}
-                  style={{ background: 'rgba(37, 99, 235, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.35)', padding: '5px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}
+                  style={{ background: 'rgb(37 99 235 / calc(0.15 * var(--tint)))', color: 'var(--a-blue)', border: '1px solid rgb(59 130 246 / calc(0.35 * var(--tint)))', padding: '5px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}
                 >
                   <Wand2 size={13} /> Write in Ollama Lab
                 </button>
               </div>
 
               {/* Video Format / Production Type Selector */}
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                  <Film size={14} color="#38bdf8" /> ভিডিওর ধরণ ও উদ্দেশ্য (Production Type):
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--t-body)', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                  <Film size={14} color="var(--a-blue)" /> ভিডিওর ধরণ ও উদ্দেশ্য (Production Type):
                 </label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7 }}>
-                  {[
-                    { id: 'story', label: 'গল্প / ইতিহাস', desc: 'Cinematic Story', icon: '🎬' },
-                    { id: 'news', label: 'সংবাদ বুলেটিন', desc: 'News & Report', icon: '📰' },
-                    { id: 'presentation', label: 'প্রেজেন্টেশন', desc: 'Project & Pitch', icon: '📊' },
-                    { id: 'explainer', label: 'শিক্ষণীয় / টেক', desc: 'Educational Explainer', icon: '🎓' },
-                    { id: 'commercial', label: 'বিজ্ঞাপন / প্রোমো', desc: 'Brand Showcase', icon: '💼' },
-                    { id: 'reel', label: 'ভাইরাল রিল', desc: 'Viral Social Shorts', icon: '📱' },
-                  ].map(item => (
+                <div className="type-grid">
+                  {VIDEO_TYPES.map(({ id, label, desc, Icon, music }) => (
                     <button
-                      key={item.id}
+                      key={id}
                       type="button"
-                      onClick={() => {
-                        setVideoType(item.id as any);
-                        if (item.id === 'news' || item.id === 'reel') setMusicTheme('cinematic_epic');
-                        else if (item.id === 'presentation') setMusicTheme('emotional_drama');
-                        else if (item.id === 'explainer') setMusicTheme('ancient_history');
-                      }}
-                      style={{
-                        padding: '8px 6px',
-                        borderRadius: 10,
-                        background: videoType === item.id ? 'rgba(56, 189, 248, 0.18)' : 'rgba(13, 18, 32, 0.65)',
-                        border: videoType === item.id ? '2px solid #38bdf8' : '1px solid rgba(255,255,255,0.08)',
-                        color: videoType === item.id ? '#38bdf8' : '#94a3b8',
-                        textAlign: 'center',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease'
-                      }}
+                      className={`type-tile ${videoType === id ? 'active' : ''}`}
+                      aria-pressed={videoType === id}
+                      onClick={() => { setVideoType(id); setMusicTheme(music); }}
                     >
-                      <div style={{ fontSize: 15 }}>{item.icon}</div>
-                      <div style={{ fontWeight: 700, fontSize: 11, marginTop: 2, color: videoType === item.id ? '#f8fafc' : '#cbd5e1' }}>{item.label}</div>
-                      <div style={{ fontSize: 9.5, opacity: 0.75 }}>{item.desc}</div>
+                      <span className="type-tile-icon"><Icon size={16} /></span>
+                      <span className="type-tile-text">
+                        <span className="type-tile-label">{label}</span>
+                        <span className="type-tile-desc">{desc}</span>
+                      </span>
                     </button>
                   ))}
                 </div>
               </div>
 
               {/* Target Video Duration System */}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
-                  <label style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
-                    <Clock size={14} color="#60a5fa" /> টার্গেট সময় ও দৈর্ঘ্য (Estimated Duration):
-                  </label>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.15)', padding: '2px 8px', borderRadius: 12, border: '1px solid rgba(56, 189, 248, 0.3)' }}>
-                    ⏱️ {targetDuration >= 60 ? `${Math.floor(targetDuration / 60)} মিনিট ${targetDuration % 60 ? `${targetDuration % 60} সে.` : ''}` : `${targetDuration} সেকেন্ড`}
-                  </span>
-                </div>
+              {(() => {
+                const DURATION_MIN = 15;
+                const DURATION_MAX = 360;
+                const sceneCount = Math.max(3, Math.min(36, Math.round(targetDuration / 5.2)));
+                const wordCount = Math.round(Math.max(10, targetDuration - sceneCount * 0.6) * 2.0);
+                const fill = ((targetDuration - DURATION_MIN) / (DURATION_MAX - DURATION_MIN)) * 100;
+                const mins = Math.floor(targetDuration / 60);
+                const secs = targetDuration % 60;
+                return (
+                  <div className="duration-card">
+                    <div className="duration-head">
+                      <label htmlFor="duration-range" style={{ fontSize: 12, fontWeight: 700, color: 'var(--t-body)', display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
+                        <Clock size={14} color="var(--a-blue)" /> টার্গেট সময় ও দৈর্ঘ্য (Estimated Duration):
+                      </label>
+                      <div className="duration-value">
+                        {mins > 0 && <><strong>{mins}</strong><span>মি.</span></>}
+                        {(secs > 0 || mins === 0) && <><strong>{secs}</strong><span>সে.</span></>}
+                      </div>
+                    </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 8 }}>
-                  {[
-                    { sec: 30, label: '30s', desc: 'Teaser' },
-                    { sec: 60, label: '1 Min', desc: 'Short' },
-                    { sec: 120, label: '2 Min', desc: 'Standard' },
-                    { sec: 180, label: '3 Min', desc: 'In-Depth' },
-                    { sec: 300, label: '5 Min', desc: 'Full Pitch' },
-                  ].map(p => (
-                    <button
-                      key={p.sec}
-                      type="button"
-                      onClick={() => setTargetDuration(p.sec)}
-                      style={{
-                        padding: '7px 4px',
-                        borderRadius: 8,
-                        background: targetDuration === p.sec ? 'rgba(37, 99, 235, 0.25)' : 'rgba(13, 18, 32, 0.6)',
-                        border: targetDuration === p.sec ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                        color: targetDuration === p.sec ? '#60a5fa' : '#94a3b8',
-                        textAlign: 'center',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <div style={{ fontWeight: 700, fontSize: 11.5 }}>{p.label}</div>
-                      <div style={{ fontSize: 9, opacity: 0.7 }}>{p.desc}</div>
-                    </button>
-                  ))}
-                </div>
+                    <input
+                      id="duration-range"
+                      type="range"
+                      className="duration-range"
+                      min={DURATION_MIN}
+                      max={DURATION_MAX}
+                      step={15}
+                      value={targetDuration}
+                      onChange={e => setTargetDuration(Number(e.target.value))}
+                      style={{ '--fill': `${fill}%` } as React.CSSProperties}
+                    />
 
-                <input
-                  type="range"
-                  min={15}
-                  max={360}
-                  step={15}
-                  value={targetDuration}
-                  onChange={e => setTargetDuration(Number(e.target.value))}
-                  style={{ width: '100%', accentColor: '#38bdf8', cursor: 'pointer', marginBottom: 6 }}
-                />
+                    <div className="duration-presets">
+                      {[
+                        { sec: 30, label: '30s', desc: 'Teaser' },
+                        { sec: 60, label: '1m', desc: 'Short' },
+                        { sec: 120, label: '2m', desc: 'Standard' },
+                        { sec: 180, label: '3m', desc: 'In-Depth' },
+                        { sec: 300, label: '5m', desc: 'Full' },
+                      ].map(p => (
+                        <button
+                          key={p.sec}
+                          type="button"
+                          className={`duration-preset ${targetDuration === p.sec ? 'active' : ''}`}
+                          aria-pressed={targetDuration === p.sec}
+                          onClick={() => setTargetDuration(p.sec)}
+                        >
+                          <strong>{p.label}</strong>
+                          <span>{p.desc}</span>
+                        </button>
+                      ))}
+                    </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 10.5, color: '#94a3b8', background: 'rgba(0,0,0,0.25)', padding: '5px 8px', borderRadius: 6 }}>
-                  <span>📊 দৃশ্য সংখ্যা: <strong style={{ color: '#38bdf8' }}>{Math.max(3, Math.min(36, Math.round(targetDuration / 5.2)))} টি দৃশ্য</strong> (প্রতি ~৫ সেকেন্ডে কাট)</span>
-                  <span>📝 স্ক্রিপ্ট: <strong style={{ color: '#f8fafc' }}>~{Math.round(targetDuration * 2.0)} শব্দ</strong></span>
-                  <span>🎯 দৈর্ঘ্য রেঞ্জ: <strong style={{ color: '#34d399' }}>{Math.max(10, targetDuration - 10)}s – {targetDuration + 10}s</strong></span>
-                </div>
-              </div>
+                    <div className="duration-stats">
+                      <div><span>দৃশ্য</span><strong>{sceneCount} টি</strong></div>
+                      <div><span>স্ক্রিপ্ট</span><strong>~{wordCount} শব্দ</strong></div>
+                      <div><span>রেঞ্জ</span><strong>{Math.max(10, targetDuration - 10)}–{targetDuration + 10}s</strong></div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Visual Quality & Motion Mode */}
               <div style={{ marginBottom: 16 }}>
-                <label style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--t-body)', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
                   <Sparkles size={14} color="#a855f7" /> ভিজ্যুয়াল কোয়ালিটি ও মোশন (Motion Engine):
                 </label>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 }}>
@@ -1017,18 +1243,18 @@ export default function App() {
                     style={{
                       padding: '8px 10px',
                       borderRadius: 10,
-                      background: motionMode === 'kenburns' ? 'rgba(168, 85, 247, 0.18)' : 'rgba(13, 18, 32, 0.65)',
-                      border: motionMode === 'kenburns' ? '2px solid #a855f7' : '1px solid rgba(255,255,255,0.08)',
+                      background: motionMode === 'kenburns' ? 'rgb(168 85 247 / calc(0.18 * var(--tint)))' : 'var(--surface)',
+                      border: '1px solid var(--line)', outline: motionMode === 'kenburns' ? '2px solid #a855f7' : 'none', outlineOffset: -2,
                       cursor: 'pointer',
                       transition: 'all 0.2s ease'
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
                       <span style={{ fontSize: 13 }}>🌟</span>
-                      <strong style={{ fontSize: 11.5, color: motionMode === 'kenburns' ? '#c084fc' : '#f8fafc' }}>Ultra HD Ken Burns</strong>
-                      <span style={{ fontSize: 9, background: 'rgba(34, 197, 94, 0.2)', color: '#4ade80', padding: '1px 4px', borderRadius: 4, fontWeight: 700 }}>প্রস্তাবিত</span>
+                      <strong style={{ fontSize: 11.5, color: motionMode === 'kenburns' ? 'var(--a-purple)' : 'var(--t-strong)' }}>Ultra HD Ken Burns</strong>
+                      <span style={{ fontSize: 9, background: 'rgb(34 197 94 / calc(0.2 * var(--tint)))', color: 'var(--a-green-bright)', padding: '1px 4px', borderRadius: 4, fontWeight: 700 }}>প্রস্তাবিত</span>
                     </div>
-                    <div style={{ fontSize: 9.5, color: '#94a3b8', lineHeight: 1.3 }}>
+                    <div style={{ fontSize: 9.5, color: 'var(--t-muted)', lineHeight: 1.3 }}>
                       স্পষ্ট 8K ছবি + সিনেম্যাটিক জুম-ইন, জুম-আউট ও ফেড ইফেক্ট (ছবি ভাঙার কোনো ঝুঁকি নেই)।
                     </div>
                   </div>
@@ -1039,8 +1265,8 @@ export default function App() {
                     style={{
                       padding: '8px 10px',
                       borderRadius: 10,
-                      background: motionMode === 'wan' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(13, 18, 32, 0.65)',
-                      border: motionMode === 'wan' ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
+                      background: motionMode === 'wan' ? 'rgb(59 130 246 / calc(0.18 * var(--tint)))' : 'var(--surface)',
+                      border: '1px solid var(--line)', outline: motionMode === 'wan' ? '2px solid #3b82f6' : 'none', outlineOffset: -2,
                       cursor: wanAvailable ? 'pointer' : 'not-allowed',
                       opacity: wanAvailable ? 1 : 0.45,
                       transition: 'all 0.2s ease'
@@ -1048,10 +1274,10 @@ export default function App() {
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
                       <span style={{ fontSize: 13 }}>🤖</span>
-                      <strong style={{ fontSize: 11.5, color: motionMode === 'wan' ? '#60a5fa' : '#f8fafc' }}>Wan 2.1 AI Motion</strong>
-                      <span style={{ fontSize: 9, background: 'rgba(234, 179, 8, 0.2)', color: '#facc15', padding: '1px 4px', borderRadius: 4, fontWeight: 700 }}>পরীক্ষামূলক</span>
+                      <strong style={{ fontSize: 11.5, color: motionMode === 'wan' ? 'var(--a-blue)' : 'var(--t-strong)' }}>Wan 2.1 AI Motion</strong>
+                      <span style={{ fontSize: 9, background: 'rgb(234 179 8 / calc(0.2 * var(--tint)))', color: 'var(--a-yellow)', padding: '1px 4px', borderRadius: 4, fontWeight: 700 }}>পরীক্ষামূলক</span>
                     </div>
-                    <div style={{ fontSize: 9.5, color: '#94a3b8', lineHeight: 1.3 }}>
+                    <div style={{ fontSize: 9.5, color: 'var(--t-muted)', lineHeight: 1.3 }}>
                       {wanAvailable
                         ? 'ComfyUI I2V নিউরাল ভিডিও এনিমেশন। ক্যারেক্টার নড়াচড়া তৈরি করে।'
                         : 'এই প্ল্যাটফর্মে সমর্থিত নয় (Not supported on this platform)।'}
@@ -1072,10 +1298,10 @@ export default function App() {
                     justifyContent: 'space-between',
                     padding: '8px 12px',
                     borderRadius: 10,
-                    background: showInspirations ? 'rgba(37, 99, 235, 0.16)' : 'rgba(13, 18, 32, 0.65)',
+                    background: showInspirations ? 'rgb(37 99 235 / calc(0.16 * var(--tint)))' : 'var(--surface)',
                     border: '1px solid',
-                    borderColor: showInspirations ? 'rgba(59, 130, 246, 0.4)' : 'rgba(255, 255, 255, 0.08)',
-                    color: showInspirations ? '#60a5fa' : '#cbd5e1',
+                    borderColor: showInspirations ? 'rgb(59 130 246 / calc(0.4 * var(--tint)))' : 'var(--line)',
+                    color: showInspirations ? 'var(--a-blue)' : 'var(--t-body)',
                     fontSize: 12.5,
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -1086,13 +1312,13 @@ export default function App() {
                     <span>💡</span>
                     <span>Quick Inspirations ({videoType.toUpperCase()} আইডিয়া)</span>
                   </div>
-                  <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                  <span style={{ fontSize: 11, color: 'var(--t-muted)' }}>
                     {showInspirations ? '▲ Hide' : '▼ Show Ideas'}
                   </span>
                 </button>
 
                 {showInspirations && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8, padding: 8, background: 'rgba(9, 13, 24, 0.7)', borderRadius: 10, border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8, padding: 8, background: 'var(--surface)', borderRadius: 10, border: '1px solid var(--line-soft)' }}>
                     {(FORMAT_INSPIRATIONS[videoType] || FORMAT_INSPIRATIONS.story).map((qs, i) => (
                       <button
                         key={i}
@@ -1103,10 +1329,10 @@ export default function App() {
                           setLanguage(qs.lang);
                           if (qs.duration) setTargetDuration(qs.duration);
                         }}
-                        style={{ textAlign: 'left', background: 'rgba(13, 18, 32, 0.8)', border: '1px solid rgba(255,255,255,0.06)', padding: '7px 10px', borderRadius: 8, fontSize: 12, color: '#cbd5e1', cursor: 'pointer' }}
+                        style={{ textAlign: 'left', background: 'var(--surface-strong)', border: '1px solid var(--line-soft)', padding: '7px 10px', borderRadius: 8, fontSize: 12, color: 'var(--t-body)', cursor: 'pointer' }}
                       >
-                        ✨ <strong style={{ color: '#60a5fa' }}>{qs.title}</strong>
-                        {qs.duration && <span style={{ fontSize: 10, color: '#38bdf8', marginLeft: 8 }}>({qs.duration}s)</span>}
+                        ✨ <strong style={{ color: 'var(--a-blue)' }}>{qs.title}</strong>
+                        {qs.duration && <span style={{ fontSize: 10, color: 'var(--a-sky)', marginLeft: 8 }}>({qs.duration}s)</span>}
                       </button>
                     ))}
                   </div>
@@ -1116,7 +1342,7 @@ export default function App() {
               <form onSubmit={handleProductionSubmit}>
                 {/* Optional Custom Title */}
                 <div style={{ marginBottom: 14 }}>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 5 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-body)', display: 'block', marginBottom: 5 }}>
                     ভিডিওর শিরোনাম (Title - Optional):
                   </label>
                   <input
@@ -1130,7 +1356,7 @@ export default function App() {
 
                 {/* Dynamic Story/News/Pitch Prompt */}
                 <div style={{ marginBottom: 16 }}>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 5 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-body)', display: 'block', marginBottom: 5 }}>
                     {PROMPT_LABELS[videoType] || "বিষয়বস্তু বা কাহিনী (Prompt):"}
                   </label>
                   <textarea
@@ -1145,8 +1371,8 @@ export default function App() {
 
                 {/* Language Selection */}
                 <div style={{ marginBottom: 16 }}>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
-                    <Languages size={14} color="#60a5fa" /> ভাষার নির্বাচন (Narrator Language):
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-body)', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
+                    <Languages size={14} color="var(--a-blue)" /> ভাষার নির্বাচন (Narrator Language):
                   </label>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
                     {[
@@ -1161,9 +1387,9 @@ export default function App() {
                         style={{
                           padding: '8px 6px',
                           borderRadius: 8,
-                          background: language === item.id ? 'rgba(37, 99, 235, 0.2)' : 'rgba(13, 18, 32, 0.6)',
-                          border: language === item.id ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                          color: language === item.id ? '#60a5fa' : '#94a3b8',
+                          background: language === item.id ? 'rgb(37 99 235 / calc(0.2 * var(--tint)))' : 'var(--surface)',
+                          border: '1px solid var(--line)', outline: language === item.id ? '2px solid #3b82f6' : 'none', outlineOffset: -2,
+                          color: language === item.id ? 'var(--a-blue)' : 'var(--t-muted)',
                           fontWeight: 600,
                           fontSize: 12,
                           textAlign: 'center'
@@ -1177,101 +1403,66 @@ export default function App() {
 
                 {/* Multi-Engine Voice Artist Selection */}
                 <div style={{ marginBottom: 20 }}>
-                  <label style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                    <Volume2 size={14} color="#38bdf8" /> ভয়েস ইঞ্জিন ও আর্টিস্ট (TTS Engine & Voice):
+                  <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--t-body)', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                    <Volume2 size={14} color="var(--a-sky)" /> ভয়েস ইঞ্জিন ও আর্টিস্ট (TTS Engine & Voice):
                   </label>
 
                   {/* Engine Switcher */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
-                    <button
-                      type="button"
-                      onClick={() => setTtsEngine("elevenlabs")}
-                      style={{
-                        padding: '9px 10px',
-                        borderRadius: 9,
-                        background: ttsEngine === 'elevenlabs' ? 'rgba(37, 99, 235, 0.22)' : 'rgba(13, 18, 32, 0.65)',
-                        border: ttsEngine === 'elevenlabs' ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                        color: ttsEngine === 'elevenlabs' ? '#60a5fa' : '#94a3b8',
-                        textAlign: 'center',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        fontWeight: 700
-                      }}
-                    >
-                      <div>👑 ElevenLabs</div>
-                      <div style={{ fontSize: 10, opacity: 0.75, fontWeight: 500, marginTop: 2 }}>Ultra Human</div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setTtsEngine("f5tts")}
-                      style={{
-                        padding: '9px 10px',
-                        borderRadius: 9,
-                        background: ttsEngine === 'f5tts' ? 'rgba(56, 189, 248, 0.2)' : 'rgba(13, 18, 32, 0.65)',
-                        border: ttsEngine === 'f5tts' ? '2px solid #38bdf8' : '1px solid rgba(255,255,255,0.08)',
-                        color: ttsEngine === 'f5tts' ? '#38bdf8' : '#94a3b8',
-                        textAlign: 'center',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        fontWeight: 700
-                      }}
-                    >
-                      <div>⚡ F5-TTS Clone</div>
-                      <div style={{ fontSize: 10, opacity: 0.75, fontWeight: 500, marginTop: 2 }}>RTX 5070 Ti</div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setTtsEngine("edge")}
-                      style={{
-                        padding: '9px 10px',
-                        borderRadius: 9,
-                        background: ttsEngine === 'edge' ? 'rgba(37, 99, 235, 0.22)' : 'rgba(13, 18, 32, 0.65)',
-                        border: ttsEngine === 'edge' ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                        color: ttsEngine === 'edge' ? '#60a5fa' : '#94a3b8',
-                        textAlign: 'center',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        fontWeight: 700
-                      }}
-                    >
-                      <div>🌐 Edge-TTS</div>
-                      <div style={{ fontSize: 10, opacity: 0.75, fontWeight: 500, marginTop: 2 }}>Fast Default</div>
-                    </button>
+                    {ENGINE_OPTIONS.map(opt => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setTtsEngine(opt.id)}
+                        style={{
+                          padding: '9px 10px',
+                          borderRadius: 9,
+                          background: ttsEngine === opt.id ? 'rgb(37 99 235 / calc(0.22 * var(--tint)))' : 'var(--surface)',
+                          border: '1px solid var(--line)', outline: ttsEngine === opt.id ? `2px solid ${opt.accent}` : 'none', outlineOffset: -2,
+                          color: ttsEngine === opt.id ? opt.accent : 'var(--t-muted)',
+                          textAlign: 'center',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                          fontWeight: 700
+                        }}
+                      >
+                        <div>{opt.label}</div>
+                        <div style={{ fontSize: 10, opacity: 'var(--sub-label-opacity)', fontWeight: 500, marginTop: 2 }}>{opt.sub}</div>
+                      </button>
+                    ))}
                   </div>
 
-                  {/* Engine 1: ElevenLabs UI */}
-                  {ttsEngine === "elevenlabs" && (
-                    <div style={{ background: 'rgba(37, 99, 235, 0.08)', border: '1px solid rgba(59, 130, 246, 0.25)', padding: '12px 14px', borderRadius: 10 }}>
-                      {!hasElevenLabsKey && (
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(234, 179, 8, 0.12)', border: '1px solid rgba(234, 179, 8, 0.3)', padding: '8px 12px', borderRadius: 8, marginBottom: 10 }}>
-                          <span style={{ fontSize: 11, color: '#facc15', display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <AlertTriangle size={13} /> ElevenLabs API Key প্রয়োজন
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setShowElevenModal(true)}
-                            style={{ background: '#ca8a04', color: '#000', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700 }}
-                          >
-                            Set Key
-                          </button>
-                        </div>
-                      )}
-
+                  {/* Engine 1: Gemini TTS */}
+                  {ttsEngine === "gemini" && (
+                    <div style={{ background: 'rgb(168 85 247 / calc(0.08 * var(--tint)))', border: '1px solid rgb(168 85 247 / calc(0.28 * var(--tint)))', padding: '12px 14px', borderRadius: 10 }}>
+                      {!hasGeminiKey && renderKeyWarning("gemini")}
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600 }}>ElevenLabs স্টুডিও ভয়েস:</span>
-                        <button
-                          type="button"
-                          onClick={() => playVoiceSample(elevenVoice, "elevenlabs")}
-                          disabled={loadingVoice === `elevenlabs:${elevenVoice}`}
-                          style={{ background: playingVoice === `elevenlabs:${elevenVoice}` ? '#ef4444' : 'rgba(37, 99, 235, 0.25)', color: playingVoice === `elevenlabs:${elevenVoice}` ? '#fff' : '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.4)', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}
-                        >
-                          {playingVoice === `elevenlabs:${elevenVoice}` ? <Square size={10} /> : <Play size={10} />}
-                          {playingVoice === `elevenlabs:${elevenVoice}` ? 'Stop' : (loadingVoice === `elevenlabs:${elevenVoice}` ? 'Generating...' : '🔊 Test ElevenLabs')}
-                        </button>
+                        <span style={{ fontSize: 11, color: 'var(--a-violet)', fontWeight: 600 }}>Gemini স্টুডিও ভয়েস ({engines.gemini?.model || 'gemini-3.8-flash-tts'}):</span>
+                        {renderPreviewButton(geminiVoice, "gemini", 'var(--a-purple)')}
                       </div>
+                      <select
+                        value={geminiVoice}
+                        onChange={e => setGeminiVoice(e.target.value)}
+                        style={{ width: '100%', padding: '9px 12px', fontSize: 13 }}
+                      >
+                        {geminiVoiceEntries.map(([id, gv]) => (
+                          <option key={id} value={id}>{gv.name} — {gv.description}</option>
+                        ))}
+                      </select>
+                      <div style={{ fontSize: 10.5, color: 'var(--t-muted)', marginTop: 6, lineHeight: 1.4 }}>
+                        প্রতিটি দৃশ্যের আবেগ অনুযায়ী ফিসফিস, বিরতি ও কণ্ঠের ওঠানামা স্বয়ংক্রিয়ভাবে প্রয়োগ হয়।
+                      </div>
+                    </div>
+                  )}
 
+                  {/* Engine 2: ElevenLabs */}
+                  {ttsEngine === "elevenlabs" && (
+                    <div style={{ background: 'rgb(37 99 235 / calc(0.08 * var(--tint)))', border: '1px solid rgb(59 130 246 / calc(0.25 * var(--tint)))', padding: '12px 14px', borderRadius: 10 }}>
+                      {!hasElevenLabsKey && renderKeyWarning("elevenlabs")}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, color: 'var(--t-muted)', fontWeight: 600 }}>ElevenLabs স্টুডিও ভয়েস ({engines.elevenlabs?.model || 'eleven_v4'}):</span>
+                        {elevenVoice !== 'custom' && renderPreviewButton(elevenVoice, "elevenlabs", 'var(--a-blue)')}
+                      </div>
                       <select
                         value={elevenVoice}
                         onChange={e => setElevenVoice(e.target.value)}
@@ -1281,7 +1472,6 @@ export default function App() {
                           <option key={ev.id} value={ev.id}>{ev.name} — {ev.desc}</option>
                         ))}
                       </select>
-
                       {elevenVoice === 'custom' && (
                         <input
                           type="text"
@@ -1294,68 +1484,38 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Engine 2: F5-TTS UI */}
+                  {/* Engine 3: F5-TTS local cloning */}
                   {ttsEngine === "f5tts" && (
-                    <div style={{ background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.28)', padding: '12px 14px', borderRadius: 10 }}>
+                    <div style={{ background: 'rgb(56 189 248 / calc(0.08 * var(--tint)))', border: '1px solid rgb(56 189 248 / calc(0.28 * var(--tint)))', padding: '12px 14px', borderRadius: 10 }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                        <span style={{ fontSize: 11, color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <Zap size={13} /> RTX 5070 Ti Local Zero-Shot Clone
+                        <span style={{ fontSize: 11, color: 'var(--a-sky)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <Zap size={13} /> Local Zero-Shot Voice Clone
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => playVoiceSample(f5Voice, "f5tts")}
-                          disabled={loadingVoice === `f5tts:${f5Voice}`}
-                          style={{ background: playingVoice === `f5tts:${f5Voice}` ? '#ef4444' : 'rgba(56, 189, 248, 0.2)', color: playingVoice === `f5tts:${f5Voice}` ? '#fff' : '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.4)', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}
-                        >
-                          {playingVoice === `f5tts:${f5Voice}` ? <Square size={10} /> : <Play size={10} />}
-                          {playingVoice === `f5tts:${f5Voice}` ? 'Stop' : (loadingVoice === `f5tts:${f5Voice}` ? 'Cloning on GPU...' : '🔊 Test F5-TTS')}
-                        </button>
+                        {renderPreviewButton(f5Voice, "f5tts", 'var(--a-sky)')}
                       </div>
-
                       <select
                         value={f5Voice}
                         onChange={e => setF5Voice(e.target.value)}
                         style={{ width: '100%', padding: '9px 12px', fontSize: 13 }}
                       >
-                        {F5_VOICE_LIST.map(fv => (
-                          <option key={fv.id} value={fv.id}>{fv.name} — {fv.desc}</option>
+                        {f5Voices.map(fv => (
+                          <option key={fv.id} value={fv.id}>{fv.custom ? '🎤 ' : ''}{fv.name}</option>
                         ))}
                       </select>
-                    </div>
-                  )}
-
-                  {/* Engine 3: Edge-TTS UI */}
-                  {ttsEngine === "edge" && (
-                    <div style={{ background: 'rgba(13, 18, 32, 0.6)', border: '1px solid rgba(255,255,255,0.08)', padding: '12px 14px', borderRadius: 10 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600 }}>Edge-TTS স্ট্যান্ডার্ড ক্লাউড ভয়েস:</span>
-                        <button
-                          type="button"
-                          onClick={() => playVoiceSample(voice, "edge")}
-                          disabled={loadingVoice === `edge:${voice}`}
-                          style={{ background: playingVoice === `edge:${voice}` ? '#ef4444' : 'rgba(37, 99, 235, 0.18)', color: playingVoice === `edge:${voice}` ? '#fff' : '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.35)', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}
-                        >
-                          {playingVoice === `edge:${voice}` ? <Square size={10} /> : <Play size={10} />}
-                          {playingVoice === `edge:${voice}` ? 'Stop' : (loadingVoice === `edge:${voice}` ? 'Loading...' : '🔊 Test Voice')}
-                        </button>
-                      </div>
-
-                      <select
-                        value={voice}
-                        onChange={e => setVoice(e.target.value)}
-                        style={{ width: '100%', padding: '9px 12px', fontSize: 13 }}
+                      <button
+                        type="button"
+                        onClick={() => { setVoiceShowcaseEngineFilter('f5tts'); switchTab('voices'); }}
+                        style={{ marginTop: 8, width: '100%', background: 'rgb(56 189 248 / calc(0.12 * var(--tint)))', color: 'var(--a-sky)', border: '1px dashed rgb(56 189 248 / calc(0.45 * var(--tint)))', padding: '7px 10px', borderRadius: 8, fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
                       >
-                        {voices[language] && Object.entries(voices[language]).map(([vId, vLabel]) => (
-                          <option key={vId} value={vId}>{vLabel}</option>
-                        ))}
-                      </select>
+                        <Mic size={13} /> নিজের কণ্ঠ যোগ করুন (Add my voice)
+                      </button>
                     </div>
                   )}
                 </div>
 
                 {/* Aspect Ratio */}
                 <div style={{ marginBottom: 22 }}>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 7 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-body)', display: 'block', marginBottom: 7 }}>
                     ভিডিও রেজোলিউশন ও ফ্রেম ফরম্যাট:
                   </label>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -1365,9 +1525,9 @@ export default function App() {
                       style={{
                         padding: '10px 12px',
                         borderRadius: 10,
-                        background: aspectRatio === "9:16" ? 'rgba(37, 99, 235, 0.2)' : 'rgba(13, 18, 32, 0.6)',
-                        border: aspectRatio === "9:16" ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                        color: aspectRatio === "9:16" ? '#60a5fa' : '#94a3b8',
+                        background: aspectRatio === "9:16" ? 'rgb(37 99 235 / calc(0.2 * var(--tint)))' : 'var(--surface)',
+                        border: '1px solid var(--line)', outline: aspectRatio === "9:16" ? '2px solid #3b82f6' : 'none', outlineOffset: -2,
+                        color: aspectRatio === "9:16" ? 'var(--a-blue)' : 'var(--t-muted)',
                         display: 'flex',
                         alignItems: 'center',
                         gap: 8,
@@ -1378,7 +1538,7 @@ export default function App() {
                       <Smartphone size={16} />
                       <div style={{ textAlign: 'left' }}>
                         <div>9:16 Vertical</div>
-                        <div style={{ fontSize: 10, opacity: 0.7 }}>Shorts / Reels</div>
+                        <div style={{ fontSize: 10, opacity: 'var(--sub-label-opacity)' }}>Shorts / Reels</div>
                       </div>
                     </button>
 
@@ -1388,9 +1548,9 @@ export default function App() {
                       style={{
                         padding: '10px 12px',
                         borderRadius: 10,
-                        background: aspectRatio === "16:9" ? 'rgba(37, 99, 235, 0.2)' : 'rgba(13, 18, 32, 0.6)',
-                        border: aspectRatio === "16:9" ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                        color: aspectRatio === "16:9" ? '#60a5fa' : '#94a3b8',
+                        background: aspectRatio === "16:9" ? 'rgb(37 99 235 / calc(0.2 * var(--tint)))' : 'var(--surface)',
+                        border: '1px solid var(--line)', outline: aspectRatio === "16:9" ? '2px solid #3b82f6' : 'none', outlineOffset: -2,
+                        color: aspectRatio === "16:9" ? 'var(--a-blue)' : 'var(--t-muted)',
                         display: 'flex',
                         alignItems: 'center',
                         gap: 8,
@@ -1401,7 +1561,7 @@ export default function App() {
                       <Tv size={16} />
                       <div style={{ textAlign: 'left' }}>
                         <div>16:9 Landscape</div>
-                        <div style={{ fontSize: 10, opacity: 0.7 }}>YouTube Standard</div>
+                        <div style={{ fontSize: 10, opacity: 'var(--sub-label-opacity)' }}>YouTube Standard</div>
                       </div>
                     </button>
                   </div>
@@ -1415,11 +1575,11 @@ export default function App() {
                     width: '100%',
                     padding: '13px',
                     borderRadius: 10,
-                    background: 'linear-gradient(90deg, #2563eb, #0284c7)',
+                    background: 'var(--primary)',
                     color: '#ffffff',
                     fontWeight: 700,
                     fontSize: 14,
-                    boxShadow: '0 4px 18px rgba(37, 99, 235, 0.4)',
+                    boxShadow: '0 4px 18px var(--primary-glow)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -1436,23 +1596,23 @@ export default function App() {
               
               {/* Failed Job Banner (if any) */}
               {latestFailedJob && (
-                <div className="glass-panel" style={{ padding: 18, border: '1px solid rgba(239, 68, 68, 0.45)', background: 'rgba(239, 68, 68, 0.08)' }}>
+                <div className="glass-panel" style={{ padding: 18, background: 'rgb(239 68 68 / calc(0.08 * var(--tint)))' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <AlertTriangle size={18} color="#ef4444" />
-                      <h4 style={{ margin: 0, fontSize: 13.5, fontWeight: 700, color: '#f87171' }}>
+                      <h4 style={{ margin: 0, fontSize: 13.5, fontWeight: 700, color: 'var(--a-red)' }}>
                         Job Failed: {latestFailedJob.title}
                       </h4>
                     </div>
                     <button
                       type="button"
                       onClick={() => handleDismissFailed(latestFailedJob.id)}
-                      style={{ background: 'rgba(239, 68, 68, 0.2)', border: '1px solid rgba(239, 68, 68, 0.4)', color: '#fca5a5', padding: '2px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}
+                      style={{ background: 'rgb(239 68 68 / calc(0.2 * var(--tint)))', border: '1px solid rgb(239 68 68 / calc(0.4 * var(--tint)))', color: 'var(--a-pink)', padding: '2px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}
                     >
                       Dismiss / Clear
                     </button>
                   </div>
-                  <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.4, wordBreak: 'break-word', maxHeight: 90, overflowY: 'auto', background: 'rgba(0,0,0,0.3)', padding: '6px 10px', borderRadius: 6 }}>
+                  <div style={{ fontSize: 12, color: 'var(--t-body)', lineHeight: 1.4, wordBreak: 'break-word', maxHeight: 90, overflowY: 'auto', background: 'var(--well)', padding: '6px 10px', borderRadius: 6 }}>
                     {latestFailedJob.error_message || 'An error occurred during video production.'}
                   </div>
                 </div>
@@ -1465,10 +1625,10 @@ export default function App() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div className="pulse-dot" style={{ width: 10, height: 10, borderRadius: '50%', background: '#3b82f6', boxShadow: '0 0 10px #3b82f6' }} />
                       <div>
-                        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#60a5fa', fontWeight: 800 }}>
+                        <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--a-blue)', fontWeight: 800 }}>
                           Currently Running Task
                         </div>
-                        <h3 style={{ fontSize: 16, fontWeight: 700, margin: '2px 0 0 0', color: '#f8fafc' }}>
+                        <h3 style={{ fontSize: 16, fontWeight: 700, margin: '2px 0 0 0', color: 'var(--t-strong)' }}>
                           {activeJob.title}
                         </h3>
                       </div>
@@ -1478,26 +1638,26 @@ export default function App() {
 
                   {/* Progress Bar & Current Step */}
                   <div style={{ marginBottom: 14 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>
-                      <span style={{ color: '#cbd5e1', fontWeight: 500 }}>{activeJob.current_step || 'Processing...'}</span>
-                      <span style={{ fontWeight: 700, color: '#60a5fa' }}>{activeJob.progress}%</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--t-muted)', marginBottom: 6 }}>
+                      <span style={{ color: 'var(--t-body)', fontWeight: 500 }}>{activeJob.current_step || 'Processing...'}</span>
+                      <span style={{ fontWeight: 700, color: 'var(--a-blue)' }}>{activeJob.progress}%</span>
                     </div>
-                    <div style={{ width: '100%', height: 8, background: 'rgba(255,255,255,0.08)', borderRadius: 10, overflow: 'hidden' }}>
+                    <div style={{ width: '100%', height: 8, background: 'var(--line)', borderRadius: 10, overflow: 'hidden' }}>
                       <div className="progress-bar-animated" style={{ width: `${activeJob.progress}%`, height: '100%', transition: 'width 0.4s ease' }} />
                     </div>
                   </div>
 
                   {/* Live Scenes Preview */}
                   {activeJob.scenes && activeJob.scenes.length > 0 && (
-                    <div style={{ marginTop: 16, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 14 }}>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8', display: 'block', marginBottom: 8 }}>
+                    <div style={{ marginTop: 16, borderTop: '1px solid var(--line-soft)', paddingTop: 14 }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-muted)', display: 'block', marginBottom: 8 }}>
                         Planned Scenes ({activeJob.scenes.length} দৃশ্য):
                       </label>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 10 }}>
                         {activeJob.scenes.map((sc, i) => (
-                          <div key={i} style={{ background: 'rgba(13, 18, 32, 0.6)', padding: 10, borderRadius: 8, border: '1px solid rgba(255,255,255,0.05)', fontSize: 12 }}>
-                            <div style={{ fontWeight: 700, color: '#60a5fa', marginBottom: 4 }}>Scene {sc.id}</div>
-                            <p style={{ color: '#cbd5e1', margin: 0, fontSize: 12, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                          <div key={i} style={{ background: 'var(--surface)', padding: 10, borderRadius: 8, border: '1px solid var(--line-soft)', fontSize: 12 }}>
+                            <div style={{ fontWeight: 700, color: 'var(--a-blue)', marginBottom: 4 }}>Scene {sc.id}</div>
+                            <p style={{ color: 'var(--t-body)', margin: 0, fontSize: 12, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                               "{sc.narration}"
                             </p>
                           </div>
@@ -1508,15 +1668,15 @@ export default function App() {
 
                   {/* Other Running Tasks if multiple */}
                   {runningJobs.length > 1 && (
-                    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 8 }}>
+                    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line-soft)' }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--t-muted)', marginBottom: 8 }}>
                         Other In-Progress Tasks ({runningJobs.length - 1}):
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         {runningJobs.slice(1).map(rj => (
-                          <div key={rj.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(0,0,0,0.2)', padding: '6px 10px', borderRadius: 6, fontSize: 12 }}>
-                            <span style={{ color: '#cbd5e1' }}>{rj.title}</span>
-                            <span style={{ color: '#60a5fa', fontWeight: 600 }}>{rj.progress}%</span>
+                          <div key={rj.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--well)', padding: '6px 10px', borderRadius: 6, fontSize: 12 }}>
+                            <span style={{ color: 'var(--t-body)' }}>{rj.title}</span>
+                            <span style={{ color: 'var(--a-blue)', fontWeight: 600 }}>{rj.progress}%</span>
                           </div>
                         ))}
                       </div>
@@ -1524,20 +1684,20 @@ export default function App() {
                   )}
                 </div>
               ) : queuedJobs.length > 0 ? (
-                <div className="glass-panel" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 14, border: '1px solid rgba(245, 158, 11, 0.25)', background: 'rgba(245, 158, 11, 0.05)' }}>
+                <div className="glass-panel" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 14, background: 'rgb(245 158 11 / calc(0.05 * var(--tint)))' }}>
                   <Clock size={24} color="#f59e0b" className="spin" />
                   <div>
-                    <div style={{ fontWeight: 700, color: '#f8fafc', fontSize: 14 }}>Preparing to Process Queue</div>
-                    <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 2 }}>
-                      Worker is picking up the next queued task: <strong style={{ color: '#f59e0b' }}>{queuedJobs[0].title}</strong>
+                    <div style={{ fontWeight: 700, color: 'var(--t-strong)', fontSize: 14 }}>Preparing to Process Queue</div>
+                    <div style={{ fontSize: 12, color: 'var(--t-body)', marginTop: 2 }}>
+                      Worker is picking up the next queued task: <strong style={{ color: 'var(--a-orange)' }}>{queuedJobs[0].title}</strong>
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="glass-panel" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 14, color: '#94a3b8' }}>
+                <div className="glass-panel" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 14, color: 'var(--t-muted)' }}>
                   <CheckCircle2 size={24} color="#3b82f6" />
                   <div>
-                    <div style={{ fontWeight: 600, color: '#f8fafc' }}>Production Pipeline is Idle</div>
+                    <div style={{ fontWeight: 600, color: 'var(--t-strong)' }}>Production Pipeline is Idle</div>
                     <div style={{ fontSize: 12 }}>Submit a story on the left, or use the <strong>Ollama Story Studio</strong> tab to write and fine-tune your script.</div>
                   </div>
                 </div>
@@ -1548,32 +1708,32 @@ export default function App() {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <Clock size={16} color="#f59e0b" />
-                    <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: '#f8fafc' }}>
+                    <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: 'var(--t-strong)' }}>
                       Waiting in Queue ({queuedJobs.length})
                     </h3>
                   </div>
                   {queuedJobs.length > 0 && (
-                    <span style={{ fontSize: 11, color: '#f59e0b', background: 'rgba(245, 158, 11, 0.12)', padding: '2px 8px', borderRadius: 12, fontWeight: 600, border: '1px solid rgba(245, 158, 11, 0.25)' }}>
+                    <span style={{ fontSize: 11, color: 'var(--a-orange)', background: 'rgb(245 158 11 / calc(0.12 * var(--tint)))', padding: '2px 8px', borderRadius: 12, fontWeight: 600, border: '1px solid rgb(245 158 11 / calc(0.25 * var(--tint)))' }}>
                       FIFO Order
                     </span>
                   )}
                 </div>
 
                 {queuedJobs.length === 0 ? (
-                  <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13, background: 'rgba(0,0,0,0.15)', borderRadius: 8 }}>
+                  <div style={{ padding: 24, textAlign: 'center', color: 'var(--t-faint)', fontSize: 13, background: 'var(--well)', borderRadius: 8 }}>
                     No videos waiting in queue. Any new video you submit will begin immediately.
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {queuedJobs.map((qj, idx) => (
-                      <div key={qj.id} style={{ background: 'rgba(13, 18, 32, 0.6)', padding: '12px 16px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div key={qj.id} style={{ background: 'var(--surface)', padding: '12px 16px', borderRadius: 10, border: '1px solid var(--line-soft)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b', background: 'rgba(245, 158, 11, 0.15)', width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--a-orange)', background: 'rgb(245 158 11 / calc(0.15 * var(--tint)))', width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgb(245 158 11 / calc(0.3 * var(--tint)))' }}>
                             #{idx + 1}
                           </span>
                           <div>
-                            <div style={{ fontWeight: 600, fontSize: 13.5, color: '#f8fafc' }}>{qj.title}</div>
-                            <div style={{ fontSize: 11, color: '#94a3b8', display: 'flex', gap: 8, marginTop: 3 }}>
+                            <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--t-strong)' }}>{qj.title}</div>
+                            <div style={{ fontSize: 11, color: 'var(--t-muted)', display: 'flex', gap: 8, marginTop: 3 }}>
                               <span>Format: {qj.aspect_ratio}</span>
                               <span>•</span>
                               <span>Lang: {qj.language.toUpperCase()}</span>
@@ -1585,14 +1745,14 @@ export default function App() {
                           </div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <span style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+                          <span style={{ background: 'rgb(245 158 11 / calc(0.15 * var(--tint)))', color: 'var(--a-amber)', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, border: '1px solid rgb(245 158 11 / calc(0.3 * var(--tint)))' }}>
                             Waiting in Queue
                           </span>
                           <button 
                             type="button"
                             onClick={() => handleDelete(qj.id)} 
                             title="Cancel & Remove from Queue"
-                            style={{ background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#ef4444', padding: '5px 8px', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                            style={{ background: 'rgb(239 68 68 / calc(0.12 * var(--tint)))', border: '1px solid rgb(239 68 68 / calc(0.25 * var(--tint)))', color: 'var(--a-red-strong)', padding: '5px 8px', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                           >
                             <Trash2 size={14} />
                           </button>
@@ -1608,12 +1768,12 @@ export default function App() {
                 <div className="glass-panel" style={{ padding: 20 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <CheckCircle2 size={16} color="#34d399" />
+                      <CheckCircle2 size={16} color="var(--a-green)" />
                       <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0 }}>Latest Completed Videos</h3>
                     </div>
                     <button
                       onClick={() => switchTab("gallery")}
-                      style={{ background: 'none', color: '#60a5fa', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
+                      style={{ background: 'none', color: 'var(--a-blue)', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
                     >
                       View All in Gallery <ArrowRight size={13} />
                     </button>
@@ -1621,7 +1781,7 @@ export default function App() {
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
                     {completedJobs.slice(0, 2).map(cj => (
-                      <div key={cj.id} style={{ background: 'rgba(13, 18, 32, 0.6)', borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <div key={cj.id} style={{ background: 'var(--surface)', borderRadius: 10, overflow: 'hidden', border: '1px solid var(--line-soft)' }}>
                         {cj.output_video && (
                           <video
                             src={`${API_BASE}${cj.output_video}`}
@@ -1630,13 +1790,13 @@ export default function App() {
                           />
                         )}
                         <div style={{ padding: 10 }}>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: '#f8fafc', marginBottom: 4 }}>{cj.title}</div>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--t-strong)', marginBottom: 4 }}>{cj.title}</div>
                           <a
                             href={`${API_BASE}${cj.output_video}`}
                             download
                             target="_blank"
                             rel="noreferrer"
-                            style={{ color: '#34d399', fontSize: 11, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600 }}
+                            style={{ color: 'var(--a-green)', fontSize: 11, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600 }}
                           >
                             <Download size={12} /> Download Video
                           </a>
@@ -1660,14 +1820,14 @@ export default function App() {
             {/* Header */}
             <div className="chat-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ width: 34, height: 34, borderRadius: 10, background: 'rgba(37, 99, 235, 0.25)', border: '1px solid rgba(59, 130, 246, 0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <MessageSquare size={17} color="#60a5fa" />
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: 'rgb(37 99 235 / calc(0.25 * var(--tint)))', border: '1px solid rgb(59 130 246 / calc(0.45 * var(--tint)))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <MessageSquare size={17} color="var(--a-blue)" />
                 </div>
                 <div>
-                  <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: '#f8fafc' }}>
+                  <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: 'var(--t-strong)' }}>
                     Ollama AI Chat (ChatGPT Mode)
                   </h3>
-                  <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                  <span style={{ fontSize: 11, color: 'var(--t-muted)' }}>
                     আপনার লোকাল LLM-এর সাথে বাংলায় বা ইংরেজিতে চ্যাট করুন
                   </span>
                 </div>
@@ -1677,11 +1837,11 @@ export default function App() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 {/* Persona selector */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600 }}>Persona:</span>
+                  <span style={{ fontSize: 11, color: 'var(--t-muted)', fontWeight: 600 }}>Persona:</span>
                   <select
                     value={chatPersona}
                     onChange={e => setChatPersona(e.target.value)}
-                    style={{ background: 'rgba(13, 18, 32, 0.9)', padding: '5px 8px', fontSize: 12, border: '1px solid rgba(255,255,255,0.1)' }}
+                    style={{ background: 'var(--surface-strong)', padding: '5px 8px', fontSize: 12, border: '1px solid var(--line)' }}
                   >
                     <option value="film_director">🎬 Film Director & Storyteller</option>
                     <option value="bangla_writer">📜 বাংলা সাহিত্যিক ও ঐতিহাসিক</option>
@@ -1692,14 +1852,14 @@ export default function App() {
 
                 {/* Model selector */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600 }}>Model:</span>
+                  <span style={{ fontSize: 11, color: 'var(--t-muted)', fontWeight: 600 }}>Model:</span>
                   <select
                     value={chatModel}
                     onChange={e => setChatModel(e.target.value)}
-                    style={{ background: 'rgba(13, 18, 32, 0.9)', color: '#60a5fa', fontWeight: 700, padding: '5px 8px', fontSize: 12, border: '1px solid rgba(59, 130, 246, 0.35)' }}
+                    style={{ background: 'var(--surface-strong)', color: 'var(--a-blue)', fontWeight: 700, padding: '5px 8px', fontSize: 12, border: '1px solid rgb(59 130 246 / calc(0.35 * var(--tint)))' }}
                   >
                     {systemStatus.models.map(m => (
-                      <option key={m} value={m} style={{ background: '#0f172a', color: '#f8fafc' }}>{m}</option>
+                      <option key={m} value={m} style={{ background: '#0f172a', color: 'var(--t-strong)' }}>{m}</option>
                     ))}
                   </select>
                 </div>
@@ -1719,7 +1879,7 @@ export default function App() {
                       ]);
                     }
                   }}
-                  style={{ background: 'rgba(239, 68, 68, 0.12)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.25)', padding: '5px 10px', borderRadius: 8, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
+                  style={{ background: 'rgb(239 68 68 / calc(0.12 * var(--tint)))', color: 'var(--a-red)', border: '1px solid rgb(239 68 68 / calc(0.25 * var(--tint)))', padding: '5px 10px', borderRadius: 8, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
                 >
                   <Trash2 size={12} /> Clear
                 </button>
@@ -1741,13 +1901,13 @@ export default function App() {
 
                     {/* Actions for assistant messages */}
                     {msg.role === 'assistant' && msg.id !== 'welcome' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--line-soft)' }}>
                         <button
                           type="button"
                           onClick={() => copyMessage(msg.id, msg.content)}
-                          style={{ background: 'rgba(255,255,255,0.06)', color: '#cbd5e1', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
+                          style={{ background: 'var(--line-soft)', color: 'var(--t-body)', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
                         >
-                          {copiedMsgId === msg.id ? <Check size={11} color="#34d399" /> : <Copy size={11} />}
+                          {copiedMsgId === msg.id ? <Check size={11} color="var(--a-green)" /> : <Copy size={11} />}
                           {copiedMsgId === msg.id ? 'Copied' : 'Copy'}
                         </button>
 
@@ -1757,7 +1917,7 @@ export default function App() {
                             setStoryPrompt(msg.content);
                             switchTab("production");
                           }}
-                          style={{ background: 'rgba(37, 99, 235, 0.2)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.35)', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
+                          style={{ background: 'rgb(37 99 235 / calc(0.2 * var(--tint)))', color: 'var(--a-blue)', border: '1px solid rgb(59 130 246 / calc(0.35 * var(--tint)))', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
                         >
                           <Film size={11} /> Use in Video Production 🎬
                         </button>
@@ -1768,7 +1928,7 @@ export default function App() {
                             setStoryTopic(msg.content);
                             switchTab("ollama");
                           }}
-                          style={{ background: 'rgba(6, 182, 212, 0.15)', color: '#38bdf8', border: '1px solid rgba(6, 182, 212, 0.3)', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
+                          style={{ background: 'rgb(6 182 212 / calc(0.15 * var(--tint)))', color: 'var(--a-sky)', border: '1px solid rgb(6 182 212 / calc(0.3 * var(--tint)))', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
                         >
                           <Wand2 size={11} /> Convert to Storyboard ✍️
                         </button>
@@ -1791,7 +1951,7 @@ export default function App() {
                     <Bot size={18} />
                   </div>
                   <div className="chat-bubble assistant" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px' }}>
-                    <span style={{ fontSize: 12, color: '#94a3b8' }}>Ollama ({chatModel}) উত্তর তৈরি করছে</span>
+                    <span style={{ fontSize: 12, color: 'var(--t-muted)' }}>Ollama ({chatModel}) উত্তর তৈরি করছে</span>
                     <div style={{ display: 'flex', gap: 3 }}>
                       <div className="typing-dot" />
                       <div className="typing-dot" />
@@ -1817,7 +1977,7 @@ export default function App() {
                     key={i}
                     type="button"
                     onClick={() => handleSendChatMessage(sugg)}
-                    style={{ whiteSpace: 'nowrap', background: 'rgba(13, 18, 32, 0.7)', border: '1px solid rgba(59, 130, 246, 0.25)', color: '#cbd5e1', padding: '6px 12px', borderRadius: 16, fontSize: 11 }}
+                    style={{ whiteSpace: 'nowrap', background: 'var(--surface)', border: '1px solid rgb(59 130 246 / calc(0.25 * var(--tint)))', color: 'var(--t-body)', padding: '6px 12px', borderRadius: 16, fontSize: 11 }}
                   >
                     💡 {sugg}
                   </button>
@@ -1855,14 +2015,14 @@ export default function App() {
                     height: 48,
                     padding: '0 20px',
                     borderRadius: 10,
-                    background: 'linear-gradient(90deg, #2563eb, #0284c7)',
+                    background: 'var(--primary)',
                     color: '#ffffff',
                     fontWeight: 700,
                     fontSize: 13,
                     display: 'flex',
                     alignItems: 'center',
                     gap: 6,
-                    boxShadow: '0 4px 16px rgba(37, 99, 235, 0.4)'
+                    boxShadow: '0 4px 16px var(--primary-glow)'
                   }}
                 >
                   <Send size={15} />
@@ -1880,33 +2040,33 @@ export default function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
             
             {/* Studio Hero Banner with Blue Glow */}
-            <div className="glass-panel" style={{ padding: '22px 26px', background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(6, 182, 212, 0.05))', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+            <div className="glass-panel" style={{ padding: '22px 26px', background: 'rgb(37 99 235 / calc(0.1 * var(--tint)))' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(37, 99, 235, 0.25)', border: '1px solid rgba(59, 130, 246, 0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Wand2 size={24} color="#60a5fa" />
+                  <div style={{ width: 44, height: 44, borderRadius: 12, background: 'rgb(37 99 235 / calc(0.25 * var(--tint)))', border: '1px solid rgb(59 130 246 / calc(0.45 * var(--tint)))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Wand2 size={24} color="var(--a-blue)" />
                   </div>
                   <div>
-                    <h2 style={{ fontSize: 20, fontWeight: 800, margin: '0 0 4px 0', color: '#f8fafc' }}>
+                    <h2 style={{ fontSize: 20, fontWeight: 800, margin: '0 0 4px 0', color: 'var(--t-strong)' }}>
                       Ollama AI Story & Script Studio
                     </h2>
-                    <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>
+                    <p style={{ fontSize: 13, color: 'var(--t-muted)', margin: 0 }}>
                       আপনার লোকাল Ollama LLM মডেল ব্যবহার করে মুহূর্তেই যেকোনো ঐতিহাসিক বা কাল্পনিক ঘটনার দৃশ্যভিত্তিক সম্পূর্ণ চিত্রনাট্য তৈরি ও সম্পাদনা করুন।
                     </p>
                   </div>
                 </div>
 
                 {/* Model Selector */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(13, 18, 32, 0.85)', padding: '6px 14px', borderRadius: 10, border: '1px solid rgba(59, 130, 246, 0.3)' }}>
-                  <Bot size={16} color="#60a5fa" />
-                  <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Ollama Model:</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface-strong)', padding: '6px 14px', borderRadius: 10, border: '1px solid rgb(59 130 246 / calc(0.3 * var(--tint)))' }}>
+                  <Bot size={16} color="var(--a-blue)" />
+                  <span style={{ fontSize: 12, color: 'var(--t-muted)', fontWeight: 600 }}>Ollama Model:</span>
                   <select
                     value={ollamaModel}
                     onChange={e => setOllamaModel(e.target.value)}
-                    style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontWeight: 700, fontSize: 13, cursor: 'pointer', outline: 'none' }}
+                    style={{ background: 'transparent', border: 'none', color: 'var(--a-blue)', fontWeight: 700, fontSize: 13, cursor: 'pointer', outline: 'none' }}
                   >
                     {systemStatus.models.map(m => (
-                      <option key={m} value={m} style={{ background: '#0f172a', color: '#f8fafc' }}>{m}</option>
+                      <option key={m} value={m} style={{ background: '#0f172a', color: 'var(--t-strong)' }}>{m}</option>
                     ))}
                   </select>
                 </div>
@@ -1919,7 +2079,7 @@ export default function App() {
                 
                 {/* Left Column: Topic & Presets */}
                 <div>
-                  <label style={{ fontSize: 13, fontWeight: 700, color: '#cbd5e1', display: 'block', marginBottom: 8 }}>
+                  <label style={{ fontSize: 13, fontWeight: 700, color: 'var(--t-body)', display: 'block', marginBottom: 8 }}>
                     কাহিনীর বিষয় বা পটভূমি (Story Topic / Prompt):
                   </label>
                   <textarea
@@ -1932,7 +2092,7 @@ export default function App() {
 
                   {/* Quick Topic Chips */}
                   <div>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 6 }}>জনপ্রিয় আইডিয়া (ক্লিক করে নির্বাচন করুন):</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--t-faint)', display: 'block', marginBottom: 6 }}>জনপ্রিয় আইডিয়া (ক্লিক করে নির্বাচন করুন):</span>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {[
                         "পলাশীর যুদ্ধ এবং মীর জাফরের বিশ্বাসঘাতকতা (১৭৫৭)",
@@ -1946,7 +2106,7 @@ export default function App() {
                           key={idx}
                           type="button"
                           onClick={() => setStoryTopic(idea)}
-                          style={{ background: 'rgba(13, 18, 32, 0.6)', border: '1px solid rgba(255,255,255,0.08)', padding: '5px 10px', borderRadius: 20, fontSize: 11, color: '#cbd5e1' }}
+                          style={{ background: 'var(--surface)', border: '1px solid var(--line)', padding: '5px 10px', borderRadius: 20, fontSize: 11, color: 'var(--t-body)' }}
                         >
                           ⚡ {idea}
                         </button>
@@ -1959,7 +2119,7 @@ export default function App() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                   {/* Language */}
                   <div>
-                    <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 6 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-body)', display: 'block', marginBottom: 6 }}>
                       চিত্রনাট্যের ভাষা (Narration Language):
                     </label>
                     <select
@@ -1976,7 +2136,7 @@ export default function App() {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     {/* Genre */}
                     <div>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 6 }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-body)', display: 'block', marginBottom: 6 }}>
                         কাহিনী ধরন (Genre):
                       </label>
                       <select
@@ -1994,7 +2154,7 @@ export default function App() {
 
                     {/* Tone */}
                     <div>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'block', marginBottom: 6 }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-body)', display: 'block', marginBottom: 6 }}>
                         মুড ও সুর (Tone):
                       </label>
                       <select
@@ -2012,9 +2172,9 @@ export default function App() {
 
                   {/* Scene Count */}
                   <div>
-                    <label style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-body)', display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                       <span>দৃশ্যের সংখ্যা (Scenes Count):</span>
-                      <span style={{ color: '#60a5fa', fontWeight: 700 }}>{storySceneCount} টি দৃশ্য (~{storySceneCount * 7} সেকেন্ড)</span>
+                      <span style={{ color: 'var(--a-blue)', fontWeight: 700 }}>{storySceneCount} টি দৃশ্য (~{storySceneCount * 7} সেকেন্ড)</span>
                     </label>
                     <div style={{ display: 'flex', gap: 8 }}>
                       {[3, 4, 5, 6].map(cnt => (
@@ -2026,9 +2186,9 @@ export default function App() {
                             flex: 1,
                             padding: '8px 0',
                             borderRadius: 8,
-                            background: storySceneCount === cnt ? 'rgba(37, 99, 235, 0.25)' : 'rgba(13, 18, 32, 0.6)',
-                            border: storySceneCount === cnt ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                            color: storySceneCount === cnt ? '#60a5fa' : '#94a3b8',
+                            background: storySceneCount === cnt ? 'rgb(37 99 235 / calc(0.25 * var(--tint)))' : 'var(--surface)',
+                            border: '1px solid var(--line)', outline: storySceneCount === cnt ? '2px solid #3b82f6' : 'none', outlineOffset: -2,
+                            color: storySceneCount === cnt ? 'var(--a-blue)' : 'var(--t-muted)',
                             fontWeight: 700,
                             fontSize: 13
                           }}
@@ -2048,7 +2208,7 @@ export default function App() {
                       marginTop: 6,
                       padding: '13px',
                       borderRadius: 10,
-                      background: 'linear-gradient(90deg, #2563eb, #0284c7)',
+                      background: 'var(--primary)',
                       color: '#ffffff',
                       fontWeight: 700,
                       fontSize: 14,
@@ -2056,7 +2216,7 @@ export default function App() {
                       alignItems: 'center',
                       justifyContent: 'center',
                       gap: 8,
-                      boxShadow: '0 4px 20px rgba(37, 99, 235, 0.45)'
+                      boxShadow: '0 4px 20px var(--primary-glow)'
                     }}
                   >
                     {isGeneratingStory ? (
@@ -2076,7 +2236,7 @@ export default function App() {
               </div>
 
               {storyError && (
-                <div style={{ marginTop: 16, padding: '12px 16px', background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
+                <div style={{ marginTop: 16, padding: '12px 16px', background: 'rgb(239 68 68 / calc(0.15 * var(--tint)))', border: '1px solid rgb(239 68 68 / calc(0.3 * var(--tint)))', borderRadius: 8, color: 'var(--a-pink)', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
                   <AlertTriangle size={16} />
                   <span>{storyError}</span>
                 </div>
@@ -2088,11 +2248,11 @@ export default function App() {
               <div className="glass-panel" style={{ padding: 24 }}>
                 
                 {/* Header with Title & Synopsis */}
-                <div style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 18, marginBottom: 20 }}>
+                <div style={{ borderBottom: '1px solid var(--line)', paddingBottom: 18, marginBottom: 20 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <BookOpen size={20} color="#60a5fa" />
-                      <span style={{ fontSize: 13, fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      <BookOpen size={20} color="var(--a-blue)" />
+                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--a-blue)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                         Ollama Generated Storyboard ({generatedScenes.length} Scenes)
                       </span>
                     </div>
@@ -2101,9 +2261,9 @@ export default function App() {
                       <button
                         type="button"
                         onClick={handleCopyScript}
-                        style={{ background: 'rgba(255,255,255,0.06)', color: '#cbd5e1', padding: '7px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+                        style={{ background: 'var(--line-soft)', color: 'var(--t-body)', padding: '7px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
                       >
-                        {copySuccess ? <Check size={14} color="#34d399" /> : <Copy size={14} />}
+                        {copySuccess ? <Check size={14} color="var(--a-green)" /> : <Copy size={14} />}
                         {copySuccess ? 'Copied Script!' : 'Copy Script'}
                       </button>
 
@@ -2112,7 +2272,7 @@ export default function App() {
                         onClick={handleSendStoryToProduction}
                         disabled={isSubmitting}
                         style={{
-                          background: 'linear-gradient(90deg, #2563eb, #0284c7)',
+                          background: 'var(--primary)',
                           color: '#fff',
                           padding: '8px 16px',
                           borderRadius: 8,
@@ -2121,7 +2281,7 @@ export default function App() {
                           display: 'flex',
                           alignItems: 'center',
                           gap: 7,
-                          boxShadow: '0 4px 18px rgba(37, 99, 235, 0.4)'
+                          boxShadow: '0 4px 18px var(--primary-glow)'
                         }}
                       >
                         <Film size={15} />
@@ -2135,7 +2295,7 @@ export default function App() {
                     type="text"
                     value={generatedTitle}
                     onChange={e => setGeneratedTitle(e.target.value)}
-                    style={{ width: '100%', fontSize: 20, fontWeight: 800, padding: '8px 12px', marginBottom: 8, background: 'rgba(13, 18, 32, 0.4)' }}
+                    style={{ width: '100%', fontSize: 20, fontWeight: 800, padding: '8px 12px', marginBottom: 8, background: 'var(--surface-soft)' }}
                   />
 
                   {/* Editable Synopsis */}
@@ -2144,7 +2304,7 @@ export default function App() {
                     value={generatedSynopsis}
                     onChange={e => setGeneratedSynopsis(e.target.value)}
                     placeholder="Story synopsis / summary..."
-                    style={{ width: '100%', fontSize: 13, padding: '8px 12px', background: 'rgba(13, 18, 32, 0.4)', color: '#94a3b8' }}
+                    style={{ width: '100%', fontSize: 13, padding: '8px 12px', background: 'var(--surface-soft)', color: 'var(--t-muted)' }}
                   />
                 </div>
 
@@ -2152,12 +2312,12 @@ export default function App() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   {generatedScenes.map((scene, idx) => (
                     <div key={idx} className="scene-card">
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, borderBottom: '1px solid var(--line-soft)', paddingBottom: 8 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span style={{ background: '#2563eb', color: '#ffffff', fontWeight: 800, fontSize: 12, padding: '2px 8px', borderRadius: 6 }}>
                             Scene {idx + 1}
                           </span>
-                          <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                          <span style={{ fontSize: 12, color: 'var(--t-muted)' }}>
                             Est. Duration: ~6-8 seconds
                           </span>
                         </div>
@@ -2168,7 +2328,7 @@ export default function App() {
                             const updated = generatedScenes.filter((_, i) => i !== idx);
                             setGeneratedScenes(updated);
                           }}
-                          style={{ background: 'none', color: '#ef4444', padding: 4 }}
+                          style={{ background: 'none', color: 'var(--a-red-strong)', padding: 4 }}
                           title="Delete Scene"
                         >
                           <Trash2 size={15} />
@@ -2178,7 +2338,7 @@ export default function App() {
                       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 14 }}>
                         {/* Narration voiceover text */}
                         <div>
-                          <label style={{ fontSize: 11, fontWeight: 700, color: '#60a5fa', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5 }}>
+                          <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--a-blue)', display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5 }}>
                             <Volume2 size={13} /> কণ্ঠস্বরের ভাষ্য (Spoken Voiceover Script):
                           </label>
                           <textarea
@@ -2191,12 +2351,51 @@ export default function App() {
                             }}
                             style={{ width: '100%', padding: '8px 10px', fontSize: 13, lineHeight: 1.5 }}
                           />
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 92px', gap: 8, marginTop: 6 }}>
+                            <div>
+                              <label style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--a-purple)', display: 'block', marginBottom: 3 }}>
+                                🎭 Delivery (কীভাবে বলবে):
+                              </label>
+                              <input
+                                type="text"
+                                value={scene.delivery || ""}
+                                placeholder="e.g. hushed, slow, suspenseful"
+                                onChange={e => {
+                                  const updated = [...generatedScenes];
+                                  updated[idx].delivery = e.target.value;
+                                  setGeneratedScenes(updated);
+                                }}
+                                style={{ width: '100%', padding: '6px 10px', fontSize: 12 }}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--a-purple)', display: 'block', marginBottom: 3 }}>
+                                ⏸ Pause (s):
+                              </label>
+                              <input
+                                type="number"
+                                min={0.2}
+                                max={2}
+                                step={0.1}
+                                value={scene.pause_after ?? 0.6}
+                                onChange={e => {
+                                  const updated = [...generatedScenes];
+                                  updated[idx].pause_after = Number(e.target.value);
+                                  setGeneratedScenes(updated);
+                                }}
+                                style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                              />
+                            </div>
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--t-faint)', marginTop: 4 }}>
+                            Cues: [whispers] [softly] [excited] [sad] [sighs] [laughs] [gasps] [short pause] [long pause]
+                          </div>
                         </div>
 
                         {/* Visual & Motion Prompts */}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                           <div>
-                            <label style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', display: 'block', marginBottom: 4 }}>
+                            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--a-sky)', display: 'block', marginBottom: 4 }}>
                               🎨 Visual AI Prompt (ComfyUI চিত্রায়ন প্রম্পট):
                             </label>
                             <textarea
@@ -2212,7 +2411,7 @@ export default function App() {
                           </div>
 
                           <div>
-                            <label style={{ fontSize: 11, fontWeight: 700, color: '#34d399', display: 'block', marginBottom: 4 }}>
+                            <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--a-green)', display: 'block', marginBottom: 4 }}>
                               🎬 Motion AI Prompt (Wan 2.1 ভিডিও অ্যানিমেশন প্রম্পট):
                             </label>
                             <textarea
@@ -2241,11 +2440,13 @@ export default function App() {
                         id: generatedScenes.length + 1,
                         narration: "নতুন দৃশ্যের ভাষ্য এখানে লিখুন...",
                         visual_prompt: "Cinematic 8k photorealistic shot...",
-                        motion_prompt: "Slow cinematic camera push in..."
+                        motion_prompt: "Slow cinematic camera push in...",
+                        delivery: "calm, steady, warm",
+                        pause_after: 0.6
                       };
                       setGeneratedScenes([...generatedScenes, newScene]);
                     }}
-                    style={{ background: 'rgba(255,255,255,0.06)', color: '#cbd5e1', border: '1px dashed rgba(59, 130, 246, 0.4)', padding: '9px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+                    style={{ background: 'var(--line-soft)', color: 'var(--t-body)', border: '1px dashed rgb(59 130 246 / calc(0.4 * var(--tint)))', padding: '9px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
                   >
                     <Plus size={15} /> Add Another Scene
                   </button>
@@ -2262,370 +2463,159 @@ export default function App() {
         {/* ========================================================================= */}
         <div className={`tab-pane ${activeTab === 'voices' ? 'active' : ''}`}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <div className="glass-panel" style={{ padding: '20px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 14 }}>
+            <div className="glass-panel page-head">
               <div>
-                <h2 style={{ fontSize: 19, fontWeight: 800, margin: '0 0 4px 0', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span>🎙️ Voice Studio</span>
-                  <span style={{ fontSize: 11, background: 'rgba(37, 99, 235, 0.25)', border: '1px solid rgba(59, 130, 246, 0.4)', color: '#60a5fa', padding: '2px 8px', borderRadius: 12 }}>ElevenLabs + F5-TTS + Edge</span>
-                </h2>
-                <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>
-                  আল্ট্রা-রিয়েলিস্টিক হিউম্যান ভয়েস (ElevenLabs), লোকাল RTX 5070 Ti ভয়েস ক্লোনিং (F5-TTS), অথবা স্ট্যান্ডার্ড ক্লাউড ভয়েস টেস্ট ও সিলেক্ট করুন।
+                <h2 className="page-title"><Mic size={18} color="var(--a-blue)" /> Voice Studio</h2>
+                <p className="page-sub">
+                  Gemini ও ElevenLabs-এর আবেগপূর্ণ কণ্ঠ শুনুন, অথবা নিজের কণ্ঠ রেকর্ড করে লোকাল F5-TTS দিয়ে ক্লোন করুন।
                 </p>
               </div>
 
-              {/* Engine Filters */}
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {[
-                  { id: 'all', label: '✨ All Engines' },
-                  { id: 'elevenlabs', label: '👑 ElevenLabs' },
-                  { id: 'f5tts', label: '⚡ F5-TTS (RTX 5070 Ti)' },
-                  { id: 'edge', label: '🌐 Edge-TTS' }
-                ].map(item => (
+              {/* Engine filter (segmented) */}
+              <div className="segmented" role="tablist" aria-label="Filter voices by engine">
+                {([
+                  { id: 'all', label: 'All', count: geminiVoiceEntries.length + ELEVENLABS_VOICE_LIST.length + f5Voices.length },
+                  { id: 'gemini', label: 'Gemini', count: geminiVoiceEntries.length },
+                  { id: 'elevenlabs', label: 'ElevenLabs', count: ELEVENLABS_VOICE_LIST.length },
+                  { id: 'f5tts', label: 'F5-TTS', count: f5Voices.length },
+                ] as const).map(item => (
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => setVoiceShowcaseEngineFilter(item.id as any)}
-                    style={{
-                      padding: '7px 14px',
-                      borderRadius: 8,
-                      background: voiceShowcaseEngineFilter === item.id ? 'rgba(37, 99, 235, 0.25)' : 'rgba(13, 18, 32, 0.65)',
-                      border: voiceShowcaseEngineFilter === item.id ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                      color: voiceShowcaseEngineFilter === item.id ? '#60a5fa' : '#94a3b8',
-                      fontWeight: 700,
-                      fontSize: 12
-                    }}
+                    role="tab"
+                    aria-selected={voiceShowcaseEngineFilter === item.id}
+                    className={`segmented-btn ${voiceShowcaseEngineFilter === item.id ? 'active' : ''}`}
+                    onClick={() => setVoiceShowcaseEngineFilter(item.id)}
                   >
                     {item.label}
+                    <span className="segmented-count">{item.count}</span>
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* ElevenLabs Status Banner (When visible) */}
-            {(voiceShowcaseEngineFilter === "all" || voiceShowcaseEngineFilter === "elevenlabs") && (
-              <div style={{ background: hasElevenLabsKey ? 'rgba(16, 185, 129, 0.08)' : 'rgba(234, 179, 8, 0.08)', border: hasElevenLabsKey ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid rgba(234, 179, 8, 0.25)', padding: '14px 20px', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 38, height: 38, borderRadius: 10, background: hasElevenLabsKey ? 'rgba(16, 185, 129, 0.2)' : 'rgba(234, 179, 8, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Key size={18} color={hasElevenLabsKey ? '#34d399' : '#facc15'} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: '#f8fafc' }}>
-                      ElevenLabs API: {hasElevenLabsKey ? `Connected (${maskedKey})` : 'API Key Not Configured'}
-                    </div>
-                    <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                      {hasElevenLabsKey 
-                        ? 'Hyper-realistic human voices with emotional cadence and breathing are fully active.'
-                        : 'ElevenLabs API key যোগ করুন যেকোনো ভাষায় হলিউড মানের আসল মানুষের মতো ভয়েস তৈরি করতে।'}
-                    </div>
-                  </div>
-                </div>
+            {(voiceShowcaseEngineFilter === "all" || voiceShowcaseEngineFilter === "gemini") && renderKeyBanner("gemini")}
+            {(voiceShowcaseEngineFilter === "all" || voiceShowcaseEngineFilter === "elevenlabs") && renderKeyBanner("elevenlabs")}
 
-                <button
-                  type="button"
-                  onClick={() => setShowElevenModal(true)}
-                  style={{ background: hasElevenLabsKey ? 'rgba(37, 99, 235, 0.25)' : '#ca8a04', color: hasElevenLabsKey ? '#60a5fa' : '#000', border: '1px solid rgba(59, 130, 246, 0.4)', padding: '8px 16px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-                >
-                  {hasElevenLabsKey ? '⚙️ Manage API Key' : '🔑 Set ElevenLabs Key'}
-                </button>
-              </div>
-            )}
-
-            {/* F5-TTS Status Banner (When visible) */}
+            {/* My Voices: record or upload a reference for F5-TTS */}
             {(voiceShowcaseEngineFilter === "all" || voiceShowcaseEngineFilter === "f5tts") && (
-              <div style={{ background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '14px 20px', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(56, 189, 248, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Zap size={18} color="#38bdf8" />
-                  </div>
+              <div className="glass-panel" style={{ padding: '20px 22px' }}>
+                <div className="section-head">
+                  <span className="section-icon secondary"><Mic size={16} /></span>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: '#f8fafc' }}>
-                      F5-TTS Voice Cloning: RTX 5070 Ti Active (16GB VRAM)
-                    </div>
-                    <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                      সম্পূর্ণ লোকাল এআই ভয়েস ক্লোনিং। HuggingFace F5-TTS Base মডেল (1.34 GB) ডাউনলোড ও সক্রিয় রয়েছে। কোনো ক্লাউড বিল নেই।
-                    </div>
+                    <div className="section-title">My Voices — নিজের কণ্ঠ সংরক্ষণ করুন</div>
+                    <p className="section-sub">
+                      ৮–১২ সেকেন্ডের পরিষ্কার, আবেগপূর্ণ আসল মানুষের কণ্ঠ রেকর্ড বা আপলোড করুন, এবং ঠিক যা বলেছেন তা হুবহু লিখুন। F5-TTS রেকর্ডিংয়ের আবেগ ও বিরতি অনুকরণ করে। রেকর্ডিং শুধু এই কম্পিউটারেই থাকে।
+                    </p>
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(13, 18, 32, 0.8)', padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(56, 189, 248, 0.3)', fontSize: 12, color: '#38bdf8', fontWeight: 600 }}>
-                  <CheckCircle2 size={14} /> Zero-Shot Model Ready
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 8 }}>
+                      <input
+                        type="text"
+                        value={newVoiceName}
+                        onChange={e => setNewVoiceName(e.target.value)}
+                        placeholder="Voice name (e.g. My Narrator)"
+                        style={{ padding: '9px 12px', fontSize: 13 }}
+                      />
+                      <select value={newVoiceLang} onChange={e => setNewVoiceLang(e.target.value)} style={{ padding: '9px 10px', fontSize: 13 }}>
+                        <option value="bn">বাংলা</option>
+                        <option value="hi">हिन्दी</option>
+                        <option value="en">English</option>
+                      </select>
+                    </div>
+                    <textarea
+                      rows={3}
+                      value={newVoiceTranscript}
+                      onChange={e => setNewVoiceTranscript(e.target.value)}
+                      placeholder="রেকর্ডিংয়ে ঠিক যা বলেছেন, হুবহু লিখুন (Exact transcript of the recording)"
+                      style={{ padding: '9px 12px', fontSize: 13, lineHeight: 1.5 }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        className={`btn ${isRecording ? 'btn-secondary' : 'btn-secondary-soft'}`}
+                        onClick={isRecording ? stopRecording : startRecording}
+                        style={{ flex: 1 }}
+                      >
+                        {isRecording ? <Square size={12} /> : <Mic size={13} />}
+                        {isRecording ? `Stop (${recordSeconds}s / ${MAX_RECORD_SECONDS}s)` : 'Record'}
+                      </button>
+                      <label className="btn btn-ghost" style={{ flex: 1 }}>
+                        <Upload size={13} /> Upload file
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          style={{ display: 'none' }}
+                          onChange={e => {
+                            const file = e.target.files?.[0];
+                            if (file) setVoiceRecording(file, file.name);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                    {newVoiceUrl && <audio controls src={newVoiceUrl} style={{ width: '100%', height: 36 }} />}
+                    <div style={{ fontSize: 11, color: 'var(--t-faint)', lineHeight: 1.45 }}>
+                      টিপ: আবেগ দিয়ে, স্বাভাবিক বিরতি ও কণ্ঠের ওঠানামাসহ একটি নাটকীয় বাক্য পড়ুন। শান্ত ঘরে, মাইক থেকে এক হাত দূরে রেকর্ড করুন।
+                    </div>
+                    {voiceUploadError && (
+                      <div style={{ fontSize: 12, color: 'var(--a-red)', background: 'rgb(239 68 68 / calc(0.12 * var(--tint)))', padding: '8px 10px', borderRadius: 8 }}>
+                        {voiceUploadError}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={handleSaveCustomVoice}
+                      disabled={isSavingVoice || isRecording || !newVoiceFile || !newVoiceName.trim() || !newVoiceTranscript.trim()}
+                    >
+                      {isSavingVoice ? 'Saving...' : 'Save my voice'}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
 
-            {/* Voices Grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 16 }}>
-
-              {/* 1. ELEVENLABS VOICES */}
-              {(voiceShowcaseEngineFilter === "all" || voiceShowcaseEngineFilter === "elevenlabs") && ELEVENLABS_VOICE_LIST.map(ev => {
-                const isSelected = ttsEngine === 'elevenlabs' && elevenVoice === ev.id;
-                const playKey = `elevenlabs:${ev.id}`;
-                const isPlaying = playingVoice === playKey;
-                const isLoading = loadingVoice === playKey;
-
-                return (
-                  <div
-                    key={`el_${ev.id}`}
-                    className="glass-panel"
-                    style={{
-                      padding: 18,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      border: isSelected ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                      background: isSelected ? 'rgba(37, 99, 235, 0.14)' : undefined
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                        <span style={{ fontSize: 11, fontWeight: 800, color: '#f59e0b', background: 'rgba(245, 158, 11, 0.16)', padding: '3px 9px', borderRadius: 12, border: '1px solid rgba(245, 158, 11, 0.3)' }}>
-                          👑 ElevenLabs Studio
-                        </span>
-                        {isSelected && (
-                          <span style={{ fontSize: 11, fontWeight: 700, color: '#34d399', display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <CheckCircle2 size={12} /> Active
-                          </span>
-                        )}
-                      </div>
-
-                      <h4 style={{ fontSize: 16, fontWeight: 800, color: '#f8fafc', margin: '0 0 6px 0' }}>
-                        {ev.name}
-                      </h4>
-
-                      <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 16px 0', lineHeight: 1.45 }}>
-                        {ev.desc}
-                      </p>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 12 }}>
-                      {ev.id !== 'custom' ? (
-                        <button
-                          type="button"
-                          onClick={() => playVoiceSample(ev.id, "elevenlabs")}
-                          disabled={isLoading}
-                          style={{
-                            flex: 1,
-                            padding: '8px 12px',
-                            borderRadius: 8,
-                            background: isPlaying ? '#ef4444' : 'rgba(37, 99, 235, 0.2)',
-                            border: '1px solid rgba(59, 130, 246, 0.4)',
-                            color: isPlaying ? '#fff' : '#60a5fa',
-                            fontWeight: 700,
-                            fontSize: 12,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: 6
-                          }}
-                        >
-                          {isPlaying ? <Square size={13} /> : <Play size={13} />}
-                          <span>{isPlaying ? 'Stop' : (isLoading ? 'Generating Preview...' : 'Listen Sample')}</span>
-                        </button>
-                      ) : (
-                        <div style={{ flex: 1, fontSize: 11, color: '#94a3b8' }}>
-                          Enter custom ID in production form
-                        </div>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTtsEngine('elevenlabs');
-                          setElevenVoice(ev.id);
-                          switchTab("production");
-                        }}
-                        style={{
-                          padding: '8px 14px',
-                          borderRadius: 8,
-                          background: isSelected ? '#2563eb' : 'rgba(255,255,255,0.06)',
-                          color: isSelected ? '#ffffff' : '#cbd5e1',
-                          fontWeight: 700,
-                          fontSize: 12
-                        }}
-                      >
-                        {isSelected ? 'Selected' : 'Use Voice'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* 2. F5-TTS VOICES */}
-              {(voiceShowcaseEngineFilter === "all" || voiceShowcaseEngineFilter === "f5tts") && F5_VOICE_LIST.map(fv => {
-                const isSelected = ttsEngine === 'f5tts' && f5Voice === fv.id;
-                const playKey = `f5tts:${fv.id}`;
-                const isPlaying = playingVoice === playKey;
-                const isLoading = loadingVoice === playKey;
-
-                return (
-                  <div
-                    key={`f5_${fv.id}`}
-                    className="glass-panel"
-                    style={{
-                      padding: 18,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      border: isSelected ? '2px solid #38bdf8' : '1px solid rgba(255,255,255,0.08)',
-                      background: isSelected ? 'rgba(56, 189, 248, 0.12)' : undefined
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                        <span style={{ fontSize: 11, fontWeight: 800, color: '#38bdf8', background: 'rgba(56, 189, 248, 0.16)', padding: '3px 9px', borderRadius: 12, border: '1px solid rgba(56, 189, 248, 0.3)' }}>
-                          ⚡ F5-TTS (RTX 5070 Ti)
-                        </span>
-                        {isSelected && (
-                          <span style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <CheckCircle2 size={12} /> Active
-                          </span>
-                        )}
-                      </div>
-
-                      <h4 style={{ fontSize: 16, fontWeight: 800, color: '#f8fafc', margin: '0 0 6px 0' }}>
-                        {fv.name}
-                      </h4>
-
-                      <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 16px 0', lineHeight: 1.45 }}>
-                        {fv.desc}
-                      </p>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 12 }}>
-                      <button
-                        type="button"
-                        onClick={() => playVoiceSample(fv.id, "f5tts")}
-                        disabled={isLoading}
-                        style={{
-                          flex: 1,
-                          padding: '8px 12px',
-                          borderRadius: 8,
-                          background: isPlaying ? '#ef4444' : 'rgba(56, 189, 248, 0.2)',
-                          border: '1px solid rgba(56, 189, 248, 0.4)',
-                          color: isPlaying ? '#fff' : '#38bdf8',
-                          fontWeight: 700,
-                          fontSize: 12,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: 6
-                        }}
-                      >
-                        {isPlaying ? <Square size={13} /> : <Play size={13} />}
-                        <span>{isPlaying ? 'Stop' : (isLoading ? 'Cloning on GPU...' : 'Listen Sample')}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTtsEngine('f5tts');
-                          setF5Voice(fv.id);
-                          switchTab("production");
-                        }}
-                        style={{
-                          padding: '8px 14px',
-                          borderRadius: 8,
-                          background: isSelected ? '#0284c7' : 'rgba(255,255,255,0.06)',
-                          color: isSelected ? '#ffffff' : '#cbd5e1',
-                          fontWeight: 700,
-                          fontSize: 12
-                        }}
-                      >
-                        {isSelected ? 'Selected' : 'Use Voice'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* 3. EDGE-TTS VOICES */}
-              {(voiceShowcaseEngineFilter === "all" || voiceShowcaseEngineFilter === "edge") && voices[language] && Object.entries(voices[language]).map(([vId, vLabel]) => {
-                const isSelected = ttsEngine === 'edge' && voice === vId;
-                const playKey = `edge:${vId}`;
-                const isPlaying = playingVoice === playKey;
-                const isLoading = loadingVoice === playKey;
-
-                return (
-                  <div
-                    key={`edge_${vId}`}
-                    className="glass-panel"
-                    style={{
-                      padding: 18,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      border: isSelected ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                      background: isSelected ? 'rgba(37, 99, 235, 0.12)' : undefined
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: '#60a5fa', background: 'rgba(37, 99, 235, 0.2)', padding: '2px 8px', borderRadius: 12 }}>
-                          🌐 Edge-TTS Cloud
-                        </span>
-                        {isSelected && (
-                          <span style={{ fontSize: 11, fontWeight: 700, color: '#34d399', display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <CheckCircle2 size={12} /> Active
-                          </span>
-                        )}
-                      </div>
-
-                      <h4 style={{ fontSize: 15, fontWeight: 700, color: '#f8fafc', margin: '0 0 8px 0' }}>
-                        {vLabel}
-                      </h4>
-
-                      <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 16px 0', lineHeight: 1.4 }}>
-                        স্ট্যান্ডার্ড দ্রুত ক্লাউড নিউরাল ভয়েস।
-                      </p>
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 12 }}>
-                      <button
-                        type="button"
-                        onClick={() => playVoiceSample(vId, "edge")}
-                        disabled={isLoading}
-                        style={{
-                          flex: 1,
-                          padding: '8px 12px',
-                          borderRadius: 8,
-                          background: isPlaying ? '#ef4444' : 'rgba(37, 99, 235, 0.18)',
-                          border: '1px solid rgba(59, 130, 246, 0.35)',
-                          color: isPlaying ? '#fff' : '#60a5fa',
-                          fontWeight: 600,
-                          fontSize: 12,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: 6
-                        }}
-                      >
-                        {isPlaying ? <Square size={13} /> : <Play size={13} />}
-                        <span>{isPlaying ? 'Stop' : (isLoading ? 'Loading...' : 'Listen Sample')}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTtsEngine('edge');
-                          setVoice(vId);
-                          switchTab("production");
-                        }}
-                        style={{
-                          padding: '8px 14px',
-                          borderRadius: 8,
-                          background: isSelected ? '#2563eb' : 'rgba(255,255,255,0.06)',
-                          color: isSelected ? '#ffffff' : '#cbd5e1',
-                          fontWeight: 700,
-                          fontSize: 12
-                        }}
-                      >
-                        {isSelected ? 'Selected' : 'Use Voice'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            {/* Voices, grouped by engine */}
+            {([
+              {
+                engine: 'gemini' as const, title: 'Gemini TTS', sub: 'Expressive studio voices with scene-by-scene emotion',
+                cards: geminiVoiceEntries.map(([id, gv]) => ({ engine: 'gemini' as const, id, name: gv.name, desc: gv.description, badge: 'Gemini TTS' })),
+              },
+              {
+                engine: 'elevenlabs' as const, title: 'ElevenLabs', sub: 'Ultra-realistic human narrators',
+                cards: ELEVENLABS_VOICE_LIST.map(ev => ({ engine: 'elevenlabs' as const, id: ev.id, name: ev.name, desc: ev.desc, badge: 'ElevenLabs', previewable: ev.id !== 'custom' })),
+              },
+              {
+                engine: 'f5tts' as const, title: 'F5-TTS', sub: 'Local voice cloning — your recordings and presets',
+                cards: f5Voices.map(fv => ({
+                  engine: 'f5tts' as const,
+                  id: fv.id,
+                  name: fv.name,
+                  desc: fv.custom ? `My recording · ${fv.duration ?? '?'}s · ${fv.transcript || ''}` : 'Preset reference voice — a clear recording of a real human voice usually sounds more natural',
+                  badge: fv.custom ? 'My voice · F5-TTS' : 'F5-TTS preset',
+                  mine: fv.custom,
+                  onDelete: fv.custom ? () => handleDeleteCustomVoice(fv.id, fv.name) : undefined,
+                })),
+              },
+            ]).filter(group => (voiceShowcaseEngineFilter === 'all' || voiceShowcaseEngineFilter === group.engine) && group.cards.length > 0).map(group => (
+              <section key={group.engine} className="voice-group">
+                <div className="voice-group-head">
+                  <h3>{group.title}</h3>
+                  <span className="segmented-count">{group.cards.length}</span>
+                  <span className="voice-group-sub">{group.sub}</span>
+                </div>
+                <div className="voice-grid">
+                  {group.cards.map(card => renderVoiceCard(card))}
+                </div>
+              </section>
+            ))}
           </div>
         </div>
 
@@ -2634,72 +2624,78 @@ export default function App() {
         {/* ========================================================================= */}
         <div className={`tab-pane ${activeTab === 'gallery' ? 'active' : ''}`}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <div className="glass-panel" style={{ padding: '20px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div className="glass-panel page-head">
               <div>
-                <h2 style={{ fontSize: 18, fontWeight: 800, margin: '0 0 4px 0', color: '#f8fafc' }}>
-                  🎞️ Completed Video Productions ({completedJobs.length})
-                </h2>
-                <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>
+                <h2 className="page-title"><Video size={18} color="var(--a-blue)" /> Video Gallery</h2>
+                <p className="page-sub">
                   উৎপাদিত সকল ভিডিও দেখুন, প্রিভিউ প্লে করুন এবং সরাসরি MP4 ডাউনলোড করুন।
                 </p>
+              </div>
+              <div className="page-stats">
+                <div><strong>{completedJobs.length}</strong><span>Videos</span></div>
+                <div>
+                  <strong>{Math.round(completedJobs.reduce((sum, j) => sum + (j.target_duration || 0), 0) / 60)}</strong>
+                  <span>Minutes</span>
+                </div>
+                <div><strong>{completedJobs.reduce((sum, j) => sum + (j.scenes?.length || 0), 0)}</strong><span>Scenes</span></div>
               </div>
             </div>
 
             {completedJobs.length === 0 ? (
-              <div className="glass-panel" style={{ padding: 48, textAlign: 'center', color: '#64748b' }}>
-                <Video size={48} style={{ margin: '0 auto 12px auto', opacity: 0.5 }} />
-                <div style={{ fontSize: 16, fontWeight: 600, color: '#f8fafc', marginBottom: 4 }}>No completed videos yet</div>
-                <div style={{ fontSize: 13 }}>Generate a video from the Production Studio or Ollama Story Studio to see it here.</div>
+              <div className="glass-panel empty-state">
+                <span className="empty-state-icon"><Video size={26} /></span>
+                <div className="empty-state-title">No completed videos yet</div>
+                <div className="empty-state-sub">Generate a video from the Production Studio or Story Studio and it will appear here.</div>
+                <button type="button" className="btn btn-primary" onClick={() => switchTab('production')}>
+                  <Plus size={14} /> Start a production
+                </button>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
-                {completedJobs.map(cj => (
-                  <div key={cj.id} className="glass-panel" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                    {cj.output_video ? (
-                      <video
-                        src={`${API_BASE}${cj.output_video}`}
-                        controls
-                        style={{ width: '100%', maxHeight: 240, background: '#000', objectFit: 'contain' }}
-                      />
-                    ) : (
-                      <div style={{ height: 200, background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <Video size={36} color="#64748b" />
+              <div className="gallery-grid">
+                {completedJobs.map(cj => {
+                  const typeInfo = VIDEO_TYPES.find(t => t.id === cj.video_type);
+                  return (
+                    <article key={cj.id} className="glass-panel gallery-card">
+                      <div className="gallery-media">
+                        {cj.output_video ? (
+                          <video
+                            src={`${API_BASE}${cj.output_video}`}
+                            poster={cj.thumbnail ? `${API_BASE}${cj.thumbnail}` : undefined}
+                            controls
+                            preload="metadata"
+                          />
+                        ) : (
+                          <Video size={32} color="var(--t-faint)" />
+                        )}
+                        <span className="gallery-aspect">{cj.aspect_ratio}</span>
                       </div>
-                    )}
 
-                    <div style={{ padding: 16, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                      <div>
-                        <h4 style={{ fontSize: 15, fontWeight: 700, margin: '0 0 6px 0', color: '#f8fafc' }}>{cj.title}</h4>
-                        <div style={{ fontSize: 11, color: '#64748b', marginBottom: 12 }}>
-                          {cj.language === 'bn' ? '🇧🇩 বাংলা' : cj.language === 'hi' ? '🇮🇳 हिन्दी' : '🇬🇧 English'} • {cj.aspect_ratio} • {cj.voice}
+                      <div className="gallery-body">
+                        <h4 className="gallery-title" title={cj.title}>{cj.title}</h4>
+                        <div className="gallery-meta">
+                          {typeInfo && <span className="chip chip-primary"><typeInfo.Icon size={11} /> {typeInfo.desc}</span>}
+                          <span className="chip">{cj.language === 'bn' ? 'বাংলা' : cj.language === 'hi' ? 'हिन्दी' : 'English'}</span>
+                          {cj.target_duration ? <span className="chip"><Clock size={11} /> {cj.target_duration >= 60 ? `${Math.round(cj.target_duration / 6) / 10}m` : `${cj.target_duration}s`}</span> : null}
+                          {cj.scenes && cj.scenes.length > 0 && <span className="chip">{cj.scenes.length} scenes</span>}
+                        </div>
+                        <div className="gallery-sub">
+                          {new Date(cj.created_at * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} · {cj.voice}
                         </div>
 
-                        {/* Scene lines preview */}
-                        {cj.scenes && cj.scenes.length > 0 && (
-                          <div style={{ background: 'rgba(13, 18, 32, 0.5)', padding: 8, borderRadius: 6, fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>
-                            {cj.scenes.length} Scenes Generated
-                          </div>
-                        )}
+                        <div className="gallery-actions">
+                          {cj.output_video && (
+                            <a className="btn btn-primary" href={`${API_BASE}${cj.output_video}`} download target="_blank" rel="noreferrer" style={{ flex: 1 }}>
+                              <Download size={14} /> Download MP4
+                            </a>
+                          )}
+                          <button type="button" className="btn btn-icon btn-danger-ghost" onClick={() => handleDelete(cj.id)} title="Delete video" aria-label={`Delete ${cj.title}`}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 10 }}>
-                        <a
-                          href={`${API_BASE}${cj.output_video}`}
-                          download
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#34d399', textDecoration: 'none', fontWeight: 600 }}
-                        >
-                          <Download size={14} /> Download MP4
-                        </a>
-
-                        <button onClick={() => handleDelete(cj.id)} style={{ background: 'none', color: '#ef4444', padding: 4 }}>
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                    </article>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2707,92 +2703,254 @@ export default function App() {
 
       </main>
 
-      {/* ElevenLabs API Key Modal */}
-      {showElevenModal && (
+      {/* Studio Settings: floating button + popup (bottom-right) */}
+      <div className="settings-fab-wrap" ref={settingsRef}>
+        {showSettings && (
+          <div className="settings-popup glass-panel" role="dialog" aria-label="Studio settings">
+            <div className="settings-popup-head">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Settings size={16} color="var(--a-blue)" />
+                <strong style={{ fontSize: 14, color: 'var(--t-strong)' }}>Studio Settings</strong>
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  className="settings-icon-btn"
+                  onClick={() => { fetchJobs(); fetchStatus(); fetchTtsConfig(); fetchEngines(); }}
+                  title="Refresh status"
+                >
+                  <RefreshCw size={13} />
+                </button>
+                <button type="button" className="settings-icon-btn" onClick={() => setShowSettings(false)} title="Close">
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* Appearance */}
+            <div className="settings-section">
+              <div className="settings-section-title">Appearance</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                {(["dark", "light"] as const).map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setTheme(mode)}
+                    style={{ padding: '7px 4px', borderRadius: 8, fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: theme === mode ? 'rgb(37 99 235 / calc(0.22 * var(--tint)))' : 'var(--surface)', border: '1px solid var(--line)', outline: theme === mode ? '1.5px solid #3b82f6' : 'none', outlineOffset: -1.5, color: theme === mode ? 'var(--a-blue)' : 'var(--t-muted)' }}
+                  >
+                    {mode === "dark" ? <Moon size={13} /> : <Sun size={13} />}
+                    {mode === "dark" ? 'Dark' : 'Light'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Services */}
+            <div className="settings-section">
+              <div className="settings-section-title">Services</div>
+              <div className="settings-row">
+                <span className="settings-label"><Bot size={13} /> Story LLM (Ollama)</span>
+                <span className={`settings-pill ${systemStatus.ollama_online ? 'ok' : 'bad'}`}>{systemStatus.ollama_online ? 'Online' : 'Offline'}</span>
+              </div>
+              {systemStatus.ollama_online && systemStatus.models.length > 0 && (
+                <select
+                  value={ollamaModel}
+                  onChange={e => setOllamaModel(e.target.value)}
+                  style={{ width: '100%', padding: '7px 10px', fontSize: 12, marginBottom: 8 }}
+                  title="Model used to write scripts"
+                >
+                  {systemStatus.models.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              )}
+              <div className="settings-row">
+                <span className="settings-label"><Cpu size={13} /> Image &amp; Video (ComfyUI)</span>
+                <span className={`settings-pill ${systemStatus.comfyui_online ? 'ok' : 'bad'}`}>{systemStatus.comfyui_online ? 'Port 8188' : 'Offline'}</span>
+              </div>
+              <div className="settings-row">
+                <span className="settings-label"><Zap size={13} /> F5-TTS voice cloning</span>
+                <span className={`settings-pill ${engines.f5tts?.ready ? 'ok' : 'warn'}`}>{engines.f5tts?.ready ? 'Ready' : 'Not set up'}</span>
+              </div>
+              <div className="settings-row" style={{ color: 'var(--t-faint)', fontSize: 11 }}>
+                <span>Platform: {systemStatus.platform || '—'}</span>
+                <span>Encoder: {systemStatus.video_encoder || '—'}</span>
+              </div>
+            </div>
+
+            {/* Voice engine */}
+            <div className="settings-section">
+              <div className="settings-section-title">Default voice engine</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                {ENGINE_OPTIONS.map(opt => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setDefaultEngine(opt.id)}
+                    style={{ padding: '7px 4px', borderRadius: 8, fontSize: 11, fontWeight: 700, background: ttsEngine === opt.id ? 'rgb(37 99 235 / calc(0.22 * var(--tint)))' : 'var(--surface)', border: '1px solid var(--line)', outline: ttsEngine === opt.id ? `1.5px solid ${opt.accent}` : 'none', outlineOffset: -1.5, color: ttsEngine === opt.id ? opt.accent : 'var(--t-muted)' }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* API keys */}
+            <div className="settings-section">
+              <div className="settings-section-title">API keys</div>
+              {(["gemini", "elevenlabs"] as KeyProvider[]).map(provider => {
+                const hasKey = provider === "gemini" ? hasGeminiKey : hasElevenLabsKey;
+                const masked = provider === "gemini" ? geminiMaskedKey : maskedKey;
+                return (
+                  <div className="settings-row" key={provider}>
+                    <span className="settings-label"><Key size={13} /> {providerName(provider)}</span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span className={`settings-pill ${hasKey ? 'ok' : 'warn'}`}>{hasKey ? masked : 'Not set'}</span>
+                      <button type="button" className="settings-link-btn" onClick={() => openKeyModal(provider)}>
+                        {hasKey ? 'Manage' : 'Set key'}
+                      </button>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Production queue */}
+            <div className="settings-section" style={{ borderBottom: 'none', paddingBottom: 0 }}>
+              <div className="settings-section-title">Production queue</div>
+              <div className="settings-row">
+                <span className="settings-label"><Video size={13} /> Running</span>
+                <span className={`settings-pill ${runningJobs.length > 0 ? 'info' : ''}`}>{runningJobs.length > 0 ? `${runningJobs[0].progress}%` : 'Idle'}</span>
+              </div>
+              <div className="settings-row">
+                <span className="settings-label"><Clock size={13} /> Waiting</span>
+                <span className="settings-pill">{queuedJobs.length}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <button
+          type="button"
+          className={`settings-fab ${showSettings ? 'open' : ''}`}
+          onClick={() => setShowSettings(open => !open)}
+          aria-label={showSettings ? 'Close studio settings' : 'Open studio settings'}
+          aria-expanded={showSettings}
+          title="Studio settings"
+        >
+          <span className="settings-fab-icon">
+            {showSettings ? <X size={16} /> : <Settings size={16} />}
+          </span>
+          <span className="settings-fab-label">Settings</span>
+          {!showSettings && (runningJobs.length + queuedJobs.length) > 0 ? (
+            <span className="settings-fab-count" title="Jobs in queue">{runningJobs.length + queuedJobs.length}</span>
+          ) : (
+            <span
+              className={`settings-fab-dot ${systemStatus.ollama_online && systemStatus.comfyui_online && (hasGeminiKey || hasElevenLabsKey) ? 'ok' : 'warn'}`}
+              title={systemStatus.ollama_online && systemStatus.comfyui_online ? 'All services online' : 'Some services need attention'}
+            />
+          )}
+        </button>
+      </div>
+
+      {/* Voice API Key Modal (Gemini + ElevenLabs) */}
+      {keyModal && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-          <div className="glass-panel" style={{ width: '100%', maxWidth: 520, padding: 28, border: '1px solid rgba(59, 130, 246, 0.4)', boxShadow: '0 20px 50px rgba(0,0,0,0.8)' }}>
+          <div className="glass-panel modal-panel" style={{ width: '100%', maxWidth: 520, padding: 28 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #f59e0b, #d97706)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <Key size={18} color="#000" />
                 </div>
                 <div>
-                  <h3 style={{ fontSize: 17, fontWeight: 800, color: '#f8fafc', margin: 0 }}>ElevenLabs API Configuration</h3>
-                  <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Ultra-Realistic Human Voice Narration</p>
+                  <h3 style={{ fontSize: 17, fontWeight: 800, color: 'var(--t-strong)', margin: 0 }}>Voice API Configuration</h3>
+                  <p style={{ fontSize: 12, color: 'var(--t-muted)', margin: 0 }}>Expressive, human-like narration</p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setShowElevenModal(false)}
-                style={{ background: 'none', color: '#94a3b8', fontSize: 18, cursor: 'pointer', padding: 4 }}
+                onClick={() => setKeyModal(null)}
+                style={{ background: 'none', color: 'var(--t-muted)', fontSize: 18, cursor: 'pointer', padding: 4 }}
               >
                 ✕
               </button>
             </div>
 
-            <p style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.5, marginBottom: 16 }}>
-              ElevenLabs ব্যবহার করে আপনি হলিউড সিনেমার মতো আবেগঘন, সাবলীল মানুষের কণ্ঠ তৈরি করতে পারবেন। আপনার API Key নিচে পেস্ট করুন:
-            </p>
+            {/* Provider switch */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
+              {(["gemini", "elevenlabs"] as KeyProvider[]).map(provider => {
+                const hasKey = provider === "gemini" ? hasGeminiKey : hasElevenLabsKey;
+                return (
+                  <button
+                    key={provider}
+                    type="button"
+                    onClick={() => openKeyModal(provider)}
+                    style={{ padding: '8px 10px', borderRadius: 8, fontSize: 12, fontWeight: 700, background: keyModal === provider ? 'rgb(37 99 235 / calc(0.25 * var(--tint)))' : 'var(--surface)', border: '1px solid var(--line)', outline: keyModal === provider ? '2px solid #3b82f6' : 'none', outlineOffset: -2, color: keyModal === provider ? 'var(--a-blue)' : 'var(--t-muted)' }}
+                  >
+                    {provider === "gemini" ? '✨ Gemini' : '👑 ElevenLabs'} {hasKey ? '✓' : ''}
+                  </button>
+                );
+              })}
+            </div>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={{ fontSize: 12, fontWeight: 700, color: '#60a5fa', display: 'block', marginBottom: 6 }}>
-                ElevenLabs API Key (xi-api-key):
+              <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--a-blue)', display: 'block', marginBottom: 6 }}>
+                {keyModal === "gemini" ? 'Gemini API Key (Google AI Studio):' : 'ElevenLabs API Key (xi-api-key):'}
               </label>
               <input
                 type="password"
-                value={elevenLabsApiKey}
-                onChange={e => setElevenLabsApiKey(e.target.value)}
-                placeholder={hasElevenLabsKey ? `Current Key: ${maskedKey}` : "Paste your key (e.g. sk_... or xi-...)"}
+                value={keyInput}
+                onChange={e => setKeyInput(e.target.value)}
+                placeholder={keyModal === "gemini"
+                  ? (hasGeminiKey ? `Current Key: ${geminiMaskedKey}` : "Paste your Gemini API key")
+                  : (hasElevenLabsKey ? `Current Key: ${maskedKey}` : "Paste your key (e.g. sk_... or xi-...)")}
                 style={{ width: '100%', padding: '10px 14px', fontSize: 13, borderRadius: 8 }}
               />
               <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
-                <span style={{ color: '#64748b' }}>
-                  {hasElevenLabsKey ? `Active Key: ${maskedKey}` : 'No key saved yet'}
+                <span style={{ color: 'var(--t-faint)' }}>
+                  {keyModal === "gemini"
+                    ? (hasGeminiKey ? `Active Key: ${geminiMaskedKey}` : 'No key saved yet')
+                    : (hasElevenLabsKey ? `Active Key: ${maskedKey}` : 'No key saved yet')}
                 </span>
                 <a
-                  href="https://elevenlabs.io"
+                  href={keyModal === "gemini" ? "https://aistudio.google.com/apikey" : "https://elevenlabs.io"}
                   target="_blank"
                   rel="noreferrer"
-                  style={{ color: '#60a5fa', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
+                  style={{ color: 'var(--a-blue)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}
                 >
-                  <ExternalLink size={11} /> Get free key from elevenlabs.io
+                  <ExternalLink size={11} /> {keyModal === "gemini" ? 'Get a key from Google AI Studio' : 'Get a key from elevenlabs.io'}
                 </a>
               </div>
             </div>
 
-            {/* Test status banner */}
-            {elevenKeyStatus && (
+            {keyStatus && (
               <div style={{
-                background: elevenKeyStatus.valid ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                border: elevenKeyStatus.valid ? '1px solid rgba(16, 185, 129, 0.35)' : '1px solid rgba(239, 68, 68, 0.35)',
+                background: keyStatus.valid ? 'rgb(16 185 129 / calc(0.15 * var(--tint)))' : 'rgb(239 68 68 / calc(0.15 * var(--tint)))',
+                border: keyStatus.valid ? '1px solid rgb(16 185 129 / calc(0.35 * var(--tint)))' : '1px solid rgb(239 68 68 / calc(0.35 * var(--tint)))',
                 padding: '10px 14px',
                 borderRadius: 8,
                 fontSize: 12,
-                color: elevenKeyStatus.valid ? '#34d399' : '#f87171',
+                color: keyStatus.valid ? 'var(--a-green)' : 'var(--a-red)',
                 marginBottom: 16,
                 fontWeight: 600
               }}>
-                {elevenKeyStatus.valid ? '✅ ' : '❌ '}
-                {elevenKeyStatus.message}
+                {keyStatus.valid ? '✅ ' : '❌ '}
+                {keyStatus.message}
               </div>
             )}
 
-            {/* Action buttons */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, borderTop: '1px solid var(--line)', paddingTop: 16 }}>
               <button
                 type="button"
-                onClick={handleTestElevenKey}
-                disabled={isTestingKey || !elevenLabsApiKey.trim()}
-                style={{ background: 'rgba(255,255,255,0.06)', color: '#cbd5e1', border: '1px solid rgba(255,255,255,0.12)', padding: '9px 16px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                onClick={handleTestKey}
+                disabled={isTestingKey || !keyInput.trim()}
+                style={{ background: 'var(--line-soft)', color: 'var(--t-body)', border: '1px solid var(--line)', padding: '9px 16px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
               >
                 {isTestingKey ? 'Verifying...' : '🔍 Test Key'}
               </button>
-
               <button
                 type="button"
-                onClick={handleSaveElevenKey}
-                disabled={isSavingKey || !elevenLabsApiKey.trim()}
-                style={{ background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: '#ffffff', border: 'none', padding: '9px 20px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: '0 0 16px rgba(37, 99, 235, 0.4)' }}
+                onClick={handleSaveKey}
+                disabled={isSavingKey || !keyInput.trim()}
+                style={{ background: 'var(--primary)', color: '#ffffff', border: 'none', padding: '9px 20px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: '0 0 16px var(--primary-glow)' }}
               >
                 {isSavingKey ? 'Saving...' : '💾 Save & Activate'}
               </button>

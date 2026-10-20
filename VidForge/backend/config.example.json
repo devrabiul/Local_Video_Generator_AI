@@ -1,9 +1,14 @@
 {
+  "default_engine": "gemini",
+  "gemini_api_key": "",
+  "gemini_tts_model": "gemini-3.8-flash-tts",
   "elevenlabs_api_key": "",
-  "default_engine": "edge",
+  "elevenlabs_model": "eleven_v4",
+  "elevenlabs_stability": 0.35,
   "elevenlabs_default_voice": "pNInz6obpgDQGcFmaJgB",
   "f5_default_ref": "bn_epic_male",
-
+  "f5_checkpoint": "",
+  "f5_vocab": "",
   "comfyui_dir": "",
   "f5_python": "",
   "ffmpeg_path": "",

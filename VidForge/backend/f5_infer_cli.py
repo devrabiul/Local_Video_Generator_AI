@@ -49,6 +49,8 @@ def main():
     parser.add_argument("--output", required=True, help="Path to output audio (.wav or .mp3)")
     parser.add_argument("--speed", type=float, default=1.0, help="Speech speed multiplier")
     parser.add_argument("--remove_silence", action="store_true", help="Remove long silences")
+    parser.add_argument("--ckpt_file", default="", help="Checkpoint to use instead of the default base model (e.g. a Bengali fine-tune)")
+    parser.add_argument("--vocab_file", default="", help="Vocabulary file that matches --ckpt_file")
 
     args = parser.parse_args()
 
@@ -68,7 +70,9 @@ def main():
     from f5_tts.api import F5TTS
     local_pt = Path(__file__).resolve().parent / "models" / "F5-TTS" / "model_1250000.pt"
     local_safetensors = Path(__file__).resolve().parent / "models" / "F5-TTS" / "model_1250000.safetensors"
-    if local_pt.exists():
+    if args.ckpt_file:
+        ckpt_file = args.ckpt_file
+    elif local_pt.exists():
         ckpt_file = str(local_pt)
     elif local_safetensors.exists():
         ckpt_file = str(local_safetensors)
@@ -76,7 +80,7 @@ def main():
         ckpt_file = ""
     if ckpt_file:
         print(f"Using local checkpoint: {ckpt_file}")
-    f5 = F5TTS(ckpt_file=ckpt_file)
+    f5 = F5TTS(ckpt_file=ckpt_file, vocab_file=args.vocab_file)
 
     print(f"Synthesizing text: '{args.gen_text[:50]}...' with reference: {ref_audio_path.name}")
     f5.infer(

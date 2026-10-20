@@ -31,6 +31,9 @@ vidforge.db
 !VidForge/backend/ref_voices/manifest.json
 !VidForge/music/*.mp3
 
+# Personal voice recordings for F5-TTS cloning stay on this machine
+VidForge/backend/ref_voices/custom/
+
 # 4. Python & Node Dependencies and Build Caches
 .venv/
 venv/
@@ -46,6 +49,8 @@ build/
 
 # 5. Local Configs, Secrets & Logs
 tts_config.json
+# Local settings with API keys - copy VidForge/backend/config.example.json to create it
+VidForge/backend/config.json
 *.log
 .env
 .env.local

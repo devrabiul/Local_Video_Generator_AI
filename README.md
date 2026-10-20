@@ -5,7 +5,7 @@ An automated end-to-end AI video production workstation with local LLM story wri
 Powered by:
 - ⚡ **NVIDIA RTX GPU Acceleration** (RTX 5070 Ti 16GB / RTX 40-series)
 - 🤖 **Ollama LLM** (`qwen2.5:14b` / `story-writer` / `qwen3.5:9b`)
-- 🎙️ **F5-TTS Zero-Shot Voice Cloning** (Local GPU) & **ElevenLabs API** (Studio Voices) & **Edge-TTS**
+- 🎙️ **Gemini 3.8 Flash TTS** (expressive narration) & **ElevenLabs v4** (Studio Voices) & **F5-TTS** (local cloning of your own voice)
 - 🎬 **ComfyUI + Wan 2.1 Image-to-Video (I2V 14B)** & **Z-Image-Turbo**
 - 🗣️ **LivePortrait Talking Photo & Lip-Sync Engine**
 - 💎 **Cyber-Glassmorphic React + Vite Web Studio**
@@ -209,17 +209,34 @@ Copy `VidForge/backend/config.example.json` to `VidForge/backend/config.json` an
 | `f5_python` | `VIDFORGE_F5_PYTHON` | ComfyUI's embedded Python or its `.venv`/`venv` |
 | `ffmpeg_path` / `ffprobe_path` | `VIDFORGE_FFMPEG` / `VIDFORGE_FFPROBE` | `ffmpeg` / `ffprobe` on `PATH` |
 | `video_encoder` | `VIDFORGE_VIDEO_ENCODER` | `auto` |
+| `gemini_tts_model` | `VIDFORGE_GEMINI_TTS_MODEL` | `gemini-3.8-flash-tts` |
+| `elevenlabs_model` / `elevenlabs_stability` | `VIDFORGE_ELEVENLABS_MODEL` / `VIDFORGE_ELEVENLABS_STABILITY` | `eleven_v4` / `0.35` (lower = more expressive) |
+| `f5_checkpoint` / `f5_vocab` | `VIDFORGE_F5_CHECKPOINT` / `VIDFORGE_F5_VOCAB` | built-in F5-TTS base model |
 | `ollama_url` / `comfyui_url` | `VIDFORGE_OLLAMA_URL` / `VIDFORGE_COMFYUI_URL` | `http://127.0.0.1:11434` / `http://127.0.0.1:8188` |
 
 Restart the backend after changing the configuration.
 
 ---
 
-## 🎙️ Optional: ElevenLabs Integration
-To enable ultra-realistic cloud voice actors alongside local F5-TTS:
-1. Open the studio web interface at `http://127.0.0.1:8700/`.
-2. Click the **ElevenLabs Capsule** in the header.
-3. Paste your [ElevenLabs](https://elevenlabs.io/) API Key and click **Save & Activate**.
+## 🎙️ Voice Engines
+
+| Engine | Where it runs | Notes |
+| :--- | :--- | :--- |
+| **Gemini TTS** (default) | Google cloud | `gemini-3.8-flash-tts`, Bengali supported, per-scene emotional direction. Needs a [Google AI Studio](https://aistudio.google.com/apikey) key. |
+| **ElevenLabs** | ElevenLabs cloud | `eleven_v4` with audio tags and request stitching across scenes. Needs an [ElevenLabs](https://elevenlabs.io/) key. |
+| **F5-TTS** | Local GPU | Clones a reference recording. Add your own voice in **Voice Studio → My Voices**. |
+
+To add API keys: open `http://127.0.0.1:8700/`, click the **Voice** capsule in the header, choose Gemini or ElevenLabs, paste the key and click **Save & Activate**.
+
+### How the narration stays natural
+- The script writer adds per-scene **delivery** directions (e.g. "hushed, slow, suspenseful"), a narrator persona, and cues such as `[whispers]`, `[sighs]`, `[short pause]`, `[long pause]`. Each engine renders them in its own syntax, and they can be edited in **Story Studio**.
+- A short pause (`pause_after`, 0.2–2 s) is added after every scene so lines don't run together.
+- ElevenLabs uses request stitching, so each scene continues the delivery of the previous one.
+
+### My Voices (F5-TTS)
+Record or upload **8–12 seconds** of a clear, expressive human voice and type its exact transcript. F5-TTS copies the emotion and pacing of the recording, so a lively reading gives lively narration. Recordings are stored in `VidForge/backend/ref_voices/custom/` and are excluded from Git.
+
+The default F5 checkpoint is trained mainly on English and Chinese. For better Bengali, point `f5_checkpoint` (and `f5_vocab`) at a Bengali fine-tuned F5-TTS model.
 
 ---
 

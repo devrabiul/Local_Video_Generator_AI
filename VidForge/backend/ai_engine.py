@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 import httpx
 from loguru import logger
-import edge_tts
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 AI_ROOT = BASE_DIR.parent
@@ -109,252 +108,6 @@ ASPECT_RESOLUTIONS = {
     "16:9": {"width": 1344, "height": 768, "render_w": 1920, "render_h": 1080, "wan_w": 832, "wan_h": 480}
 }
 
-VOICES = {
-    "bn": {
-        "bn-BD-PradeepNeural": "Pradeep (বাংলাদেশী গম্ভীর ড্রামাটিক পুরুষ - Epic & Cinematic)",
-        "bn-BD-NabanitaNeural": "Nabanita (বাংলাদেশী সাবলীল আবেগঘন নারী - Soft & Narrative)",
-        "bn-IN-BashkarNeural": "Bashkar (পশ্চিমবঙ্গীয় ক্লাসিক বর্ণনাকারী পুরুষ - Classic Doc)",
-        "bn-IN-TanishaaNeural": "Tanishaa (পশ্চিমবঙ্গীয় আবেগঘন স্পষ্ট নারী - Modern & Clear)"
-    },
-    "hi": {
-        "hi-IN-MadhurNeural": "Madhur (गंभीर कथावाचक पुरुष - Epic Hindi)",
-        "hi-IN-SwaraNeural": "Swara (भावुक महिला स्वर - Emotional Hindi)"
-    },
-    "en": {
-        "en-US-ChristopherNeural": "Christopher (US Male - Deep & Authoritative Documentary)",
-        "en-GB-RyanNeural": "Ryan (UK Male - Epic Historical British)",
-        "en-US-GuyNeural": "Guy (US Male - Cinematic Storyteller)",
-        "en-US-BrianMultilingualNeural": "Brian (US Male - Crisp & Expressive)",
-        "en-US-AriaNeural": "Aria (US Female - Cinematic & Engaging)",
-        "en-US-EmmaMultilingualNeural": "Emma (US Female - Warm & Emotional)",
-        "en-GB-SoniaNeural": "Sonia (UK Female - Sophisticated British Narration)",
-        "en-IN-PrabhatNeural": "Prabhat (Indian English Male - Clear & Articulate)",
-        "en-IN-NeerjaExpressiveNeural": "Neerja (Indian English Female - Expressive & Vivid)"
-    }
-}
-
-ELEVENLABS_VOICES = {
-    "pNInz6obpgDQGcFmaJgB": {
-        "name": "Adam",
-        "description": "Deep, Authoritative Narration - US Male (Documentary & Epic)",
-        "gender": "male",
-        "lang": "multilingual"
-    },
-    "ErXwobaYiN019PkySvjV": {
-        "name": "Antoni",
-        "description": "Dramatic Storyteller & Engaging - US Male",
-        "gender": "male",
-        "lang": "multilingual"
-    },
-    "JBFqnCBsd6RMkjVDRZzb": {
-        "name": "George",
-        "description": "Warm, Eloquent British Documentary - UK Male",
-        "gender": "male",
-        "lang": "multilingual"
-    },
-    "21m00Tcm4TlvDq8ikWAM": {
-        "name": "Rachel",
-        "description": "Calm, Intimate & Clear Narration - US Female",
-        "gender": "female",
-        "lang": "multilingual"
-    },
-    "EXAVITQu4vr4xnSDxMaL": {
-        "name": "Bella",
-        "description": "Expressive, Vibrant & Emotional - US Female",
-        "gender": "female",
-        "lang": "multilingual"
-    },
-    "onwK4e9ZLuTAKqWW03F9": {
-        "name": "Daniel",
-        "description": "Authoritative, Deep Broadcast - UK Male",
-        "gender": "male",
-        "lang": "multilingual"
-    },
-    "TX3LPaxmHKxFdv7VOQHJ": {
-        "name": "Liam",
-        "description": "Young, Energetic & Direct - US Male",
-        "gender": "male",
-        "lang": "multilingual"
-    }
-}
-
-F5_PRESET_VOICES = {
-    "bn_epic_male": {
-        "name": "Pradeep Seed (বাংলা গম্ভীর পুরুষ কণ্ঠ)",
-        "file": "bn_epic_male.wav",
-        "text": "প্রাচীন বাংলার ইতিহাস এক গৌরবময় বীরত্ব ও ত্যাগের কাহিনী।",
-        "lang": "bn"
-    },
-    "bn_soft_female": {
-        "name": "Nabanita Seed (বাংলা সাবলীল নারী কণ্ঠ)",
-        "file": "bn_soft_female.wav",
-        "text": "নদীর কূল ঘেঁষে গড়ে ওঠা এই জনপদের প্রতিটি ধূলিকণায় লুকিয়ে আছে কত না বলা রূপকথা।",
-        "lang": "bn"
-    },
-    "en_nature": {
-        "name": "Nature & Earth (English Cinematic Male)",
-        "file": "en_nature.wav",
-        "text": "Some call me nature, others call me mother nature.",
-        "lang": "en"
-    }
-}
-
-SAMPLE_PHRASES = {
-    "bn": "স্বাগতম VidForge এ। আমি আপনার ঐতিহাসিক কাহিনীর কণ্ঠস্বর।",
-    "hi": "VidForge में आपका स्वागत है। मैं आपकी कहानी का स्वर हूँ।",
-    "en": "Welcome to VidForge AI Studio. I am your cinematic narrator."
-}
-
-def get_tts_config() -> dict:
-    return _load_config() or {"elevenlabs_api_key": "", "default_engine": "edge"}
-
-def save_tts_config(data: dict) -> dict:
-    cfg = get_tts_config()
-    cfg.update(data)
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
-    return cfg
-
-def get_all_tts_engines() -> dict:
-    cfg = get_tts_config()
-    has_eleven_key = bool(cfg.get("elevenlabs_api_key"))
-    return {
-        "edge": {
-            "name": "Edge-TTS (Standard & Fast)",
-            "description": "Fast multilingual neural voices provided by Microsoft",
-            "voices": VOICES
-        },
-        "elevenlabs": {
-            "name": "ElevenLabs Studio (Ultra-Realistic Human)",
-            "description": "Hyper-realistic emotion, breaths, pauses, and cadence",
-            "configured": has_eleven_key,
-            "voices": ELEVENLABS_VOICES
-        },
-        "f5tts": {
-            "name": "F5-TTS (Local Zero-Shot Voice Cloning)",
-            "description": "Local AI voice cloning running on your RTX 5070 Ti GPU",
-            "ready": F5_PYTHON.exists(),
-            "voices": F5_PRESET_VOICES
-        }
-    }
-
-F5_PYTHON = Path(_setting("f5_python", "VIDFORGE_F5_PYTHON", str(_default_f5_python(COMFYUI_DIR))))
-F5_CLI_SCRIPT = BASE_DIR / "backend" / "f5_infer_cli.py"
-REF_VOICES_DIR = BASE_DIR / "backend" / "ref_voices"
-
-async def generate_elevenlabs_voiceover(text: str, voice_id: str, output_path: Path, api_key: str = None) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if not api_key:
-        cfg = get_tts_config()
-        api_key = cfg.get("elevenlabs_api_key") or os.environ.get("ELEVENLABS_API_KEY", "")
-    
-    if not api_key:
-        raise ValueError("ElevenLabs API Key is required. Please add your API key in ElevenLabs settings.")
-    
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    headers = {
-        "xi-api-key": api_key.strip(),
-        "Content-Type": "application/json",
-        "Accept": "audio/mpeg"
-    }
-    payload = {
-        "text": text,
-        "model_id": "eleven_multilingual_v2",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75,
-            "style": 0.0,
-            "use_speaker_boost": True
-        }
-    }
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        res = await client.post(url, json=payload, headers=headers)
-        if res.status_code != 200:
-            err_msg = res.text
-            try:
-                err_json = res.json()
-                err_msg = err_json.get("detail", {}).get("message") or err_json.get("message") or res.text
-            except Exception:
-                pass
-            raise RuntimeError(f"ElevenLabs error ({res.status_code}): {err_msg}")
-        output_path.write_bytes(res.content)
-    return output_path
-
-async def generate_f5_voiceover(text: str, ref_key: str, output_path: Path, ref_audio_custom: str = None, ref_text_custom: str = None) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    ref_file = None
-    ref_txt = ""
-
-    if ref_audio_custom and Path(ref_audio_custom).exists():
-        ref_file = Path(ref_audio_custom)
-        ref_txt = ref_text_custom or ""
-    elif ref_key in F5_PRESET_VOICES:
-        meta = F5_PRESET_VOICES[ref_key]
-        candidate = REF_VOICES_DIR / meta["file"]
-        if candidate.exists():
-            ref_file = candidate
-            ref_txt = meta["text"]
-
-    if not ref_file or not ref_file.exists():
-        ref_file = REF_VOICES_DIR / "en_nature.wav"
-        ref_txt = "Some call me nature, others call me mother nature."
-
-    cmd = [
-        str(F5_PYTHON),
-        str(F5_CLI_SCRIPT),
-        "--ref_audio", str(ref_file),
-        "--ref_text", ref_txt,
-        "--gen_text", text,
-        "--output", str(output_path),
-        "--speed", "1.0",
-        "--remove_silence"
-    ]
-
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["VIDFORGE_FFMPEG"] = FFMPEG
-
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        err_msg = stderr.decode(errors="replace")
-        logger.error(f"F5-TTS failed: {err_msg}")
-        raise RuntimeError(f"F5-TTS error: {err_msg}")
-    
-    return output_path
-
-async def generate_voice_sample(voice: str, engine: str = "edge", ref_audio: str = "", ref_text: str = "", api_key: str = "") -> str:
-    """Generates an audio preview for a voice from any engine and caches it"""
-    samples_dir = BASE_DIR / "output" / "voice_samples"
-    samples_dir.mkdir(parents=True, exist_ok=True)
-    
-    clean_voice = voice.replace(":", "_").replace("/", "_").replace("\\", "_")
-    sample_file = samples_dir / f"{engine}_{clean_voice}.mp3"
-    
-    if not sample_file.exists() or sample_file.stat().st_size == 0:
-        phrase = SAMPLE_PHRASES["en"]
-        if clean_voice.startswith("bn") or "bn" in clean_voice or voice in ("bn_epic_male", "bn_soft_female"):
-            phrase = SAMPLE_PHRASES["bn"]
-        elif clean_voice.startswith("hi") or "hi" in clean_voice:
-            phrase = SAMPLE_PHRASES["hi"]
-
-        await generate_voiceover(
-            text=phrase,
-            voice=voice,
-            output_path=sample_file,
-            tts_engine=engine,
-            ref_audio=ref_audio,
-            ref_text=ref_text,
-            api_key=api_key
-        )
-        
-    return f"/output/voice_samples/{engine}_{clean_voice}.mp3"
-
 VIDEO_TYPES_CONFIG = {
     "story": {
         "name": "Cinematic Story & Folklore",
@@ -397,8 +150,53 @@ VIDEO_TYPES_CONFIG = {
         "narration_guidelines": "High-retention 3-second hook, fast-moving curiosity loops, punchy, concise sentences that keep viewers glued to the screen until the end.",
         "visual_guidelines": "Bold saturated colors, eye-catching composition optimized for mobile vertical 9:16 viewing, dynamic focal elements.",
         "default_music": "cinematic_epic"
+    },
+    "documentary": {
+        "name": "Nature & World Documentary",
+        "persona": "You are an acclaimed documentary filmmaker and wildlife narrator.",
+        "narration_guidelines": "Calm, awe-inspiring, observational documentary narration. Reveal fascinating facts gradually, build a sense of wonder, and keep a measured, respectful tone throughout.",
+        "visual_guidelines": "Sweeping aerial landscapes, telephoto wildlife photography, golden-hour natural light, rich textures, National Geographic style realism.",
+        "default_music": "emotional_drama"
+    },
+    "biography": {
+        "name": "Biography & Life Story",
+        "persona": "You are a renowned biographer and historical portrait filmmaker.",
+        "narration_guidelines": "Chronological life story: early life, struggles, turning point, greatest achievements and legacy. Human, respectful and inspiring, with key dates and concrete details.",
+        "visual_guidelines": "Period-accurate portraits and settings, warm archival film grain, intimate character close-ups, era-specific costumes and architecture.",
+        "default_music": "ancient_history"
+    },
+    "motivational": {
+        "name": "Motivational & Self-Improvement",
+        "persona": "You are a world-class motivational speaker and life coach.",
+        "narration_guidelines": "Powerful, uplifting, second-person speech ('আপনি পারবেন...'). Open with a relatable struggle, build intensity, share one clear lesson and end with a strong, actionable call to rise.",
+        "visual_guidelines": "Silhouettes at sunrise, mountain summits, athletes in training, dramatic rim lighting, high-contrast cinematic grading.",
+        "default_music": "cinematic_epic"
+    },
+    "travel": {
+        "name": "Travel & Destination Guide",
+        "persona": "You are an enthusiastic travel filmmaker and destination guide host.",
+        "narration_guidelines": "Vivid, inviting travel narration. Describe the place's character, history, food, culture and must-see spots, with practical tips. Make the viewer want to go there.",
+        "visual_guidelines": "Stunning destination cinematography, bustling local markets, landmark wide shots, vibrant street life, warm travel-vlog color grading.",
+        "default_music": "emotional_drama"
+    },
+    "kids": {
+        "name": "Kids Story & Moral Tale",
+        "persona": "You are a beloved children's storyteller and animated film writer.",
+        "narration_guidelines": "Simple, warm, playful language for young children. Gentle adventure with friendly characters, clear and kind emotions, and a clear moral lesson at the end. Nothing frightening or violent.",
+        "visual_guidelines": "Bright colorful 3D animated storybook style, soft rounded characters, cheerful lighting, Pixar-like friendly environments.",
+        "default_music": "emotional_drama"
+    },
+    "mystery": {
+        "name": "Mystery & Unsolved Cases",
+        "persona": "You are a gripping mystery storyteller and investigative documentary host.",
+        "narration_guidelines": "Suspenseful, slow-burn narration. Open with an intriguing question, reveal clues one by one, present theories fairly, and end with a haunting open question. No graphic gore.",
+        "visual_guidelines": "Moody low-key lighting, fog and shadows, abandoned locations, old documents and clues on a desk, desaturated noir color grading.",
+        "default_music": "ancient_history"
     }
 }
+
+# Engine-neutral performance cues the script writer may use; tts_engine renders them per engine
+PERFORMANCE_CUES = ["[whispers]", "[softly]", "[excited]", "[sad]", "[sighs]", "[laughs]", "[gasps]", "[short pause]", "[long pause]"]
 
 def calculate_duration_profile(target_duration: int = 60) -> tuple[int, int, int]:
     """Calculates (scene_count, words_target, words_per_scene) for modern high-retention video (cut every 4-6s)"""
@@ -408,8 +206,8 @@ def calculate_duration_profile(target_duration: int = 60) -> tuple[int, int, int
     sec_per_scene = 5.2
     scene_count = max(3, min(36, int(round(target_sec / sec_per_scene))))
     
-    # Average speech: 1.95 - 2.0 words per second
-    words_target = int(target_sec * 2.0)
+    # Average speech: 1.95 - 2.0 words per second, leaving ~0.6s of breathing room after each scene
+    words_target = int(max(10, target_sec - scene_count * 0.6) * 2.0)
     words_per_scene = max(8, int(round(words_target / scene_count)))
     return scene_count, words_target, words_per_scene
 
@@ -483,24 +281,34 @@ Target Total Video Duration: Approximately {target_duration} seconds (~{target_d
 Strict Timing & High-Retention Pacing Rules:
 - You MUST generate EXACTLY {final_scene_count} chronological scenes.
 - Visual Pacing: Each scene MUST cut/transition quickly (every ~4 to 6 seconds) to maintain viewer retention and avoid boredom.
-- Narration Length: Each scene's spoken voiceover MUST be punchy and concise, containing approximately {words_per_scene} words (1 vivid sentence in {target_lang}).
+- Narration Length: Each scene's spoken voiceover contains approximately {words_per_scene} words (1-3 short, natural sentences in {target_lang}).
 - Total Spoken Words: The total narration across all {final_scene_count} scenes MUST be approximately {words_target} words so the spoken voiceover matches ~{target_duration}s.
 
+Voice Performance Rules (the narration is performed by an expressive human-like voice actor):
+- Write the narration as ONE continuous performance: each scene must flow naturally from the previous one, following an emotional arc (build tension, release it, contrast quiet and powerful moments).
+- Use natural punctuation for rhythm: commas, "…" for a lingering pause, "—" for a sudden break.
+- You MAY insert performance cues inside the narration, written in English square brackets, ONLY from this list: {', '.join(PERFORMANCE_CUES)}. Use 0-2 cues per scene, only where a real narrator would change delivery. Never put any other words in square brackets.
+
 Requirements for each scene:
-1. "narration": Spoken voiceover line STRICTLY in {target_lang} (~{words_per_scene} words).
+1. "narration": Spoken voiceover STRICTLY in {target_lang} (~{words_per_scene} words, cues not counted).
    Format Guidelines: {cfg['narration_guidelines']}
-2. "visual_prompt": A unique, distinct visual description written in English for 8K photorealistic image generation (ComfyUI Z-Image-Turbo). Vary camera angles, subjects, macro details, and perspectives between scenes!
+2. "delivery": 2-6 English words telling the voice actor HOW to speak this scene: emotion, volume and pace (e.g. "hushed, slow, suspenseful", "rising, proud, powerful", "soft, tender, intimate").
+3. "pause_after": Seconds of silence after this scene: 0.3 for quick flow, 0.6 normally, 1.0-1.5 before a dramatic turn and after the final scene.
+4. "visual_prompt": A unique, distinct visual description written in English for 8K photorealistic image generation (ComfyUI Z-Image-Turbo). Vary camera angles, subjects, macro details, and perspectives between scenes!
    Visual Guidelines: {cfg['visual_guidelines']}
-3. "motion_prompt": A camera motion description in English for smooth Ken Burns cinematic panning/zooming (e.g. "slow cinematic push in", "gentle pan right", "dynamic zoom out", "tilt up").
+5. "motion_prompt": A camera motion description in English for smooth Ken Burns cinematic panning/zooming (e.g. "slow cinematic push in", "gentle pan right", "dynamic zoom out", "tilt up").
 
 Respond ONLY with valid JSON in this exact structure:
 {{
   "title": "Clear Gripping Title",
   "synopsis": "1-2 sentence overview of the video content",
+  "narrator_style": "3-8 English words describing the narrator's overall voice persona (e.g. warm, intimate documentary storyteller)",
   "scenes": [
     {{
       "id": 1,
-      "narration": "Voiceover line in {target_lang} (~{words_per_scene} words)",
+      "narration": "Voiceover in {target_lang} (~{words_per_scene} words), optionally with cues like [short pause]",
+      "delivery": "How to speak it, in English",
+      "pause_after": 0.6,
       "visual_prompt": "Visual description in English",
       "motion_prompt": "Camera motion in English"
     }}
@@ -597,40 +405,6 @@ async def plan_script(prompt: str, language: str, video_type: str = "story", tar
 async def plan_story(prompt: str, language: str, model: str = None) -> dict:
     return await plan_script(prompt, language, video_type="story", target_duration=60, model=model)
 
-async def generate_voiceover(
-    text: str,
-    voice: str,
-    output_path: Path,
-    tts_engine: str = "edge",
-    ref_audio: str = "",
-    ref_text: str = "",
-    api_key: str = ""
-) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Detect engine from voice prefix if embedded
-    if voice.startswith("elevenlabs:"):
-        tts_engine = "elevenlabs"
-        voice = voice.replace("elevenlabs:", "")
-    elif voice.startswith("f5:") or voice.startswith("f5tts:"):
-        tts_engine = "f5-tts"
-        voice = voice.replace("f5tts:", "").replace("f5:", "")
-    elif voice.startswith("edge:"):
-        tts_engine = "edge"
-        voice = voice.replace("edge:", "")
-
-    logger.info(f"Generating voiceover: engine='{tts_engine}', voice='{voice}'")
-
-    if tts_engine == "elevenlabs":
-        return await generate_elevenlabs_voiceover(text=text, voice_id=voice, output_path=output_path, api_key=api_key)
-    elif tts_engine in ("f5-tts", "f5tts"):
-        return await generate_f5_voiceover(text=text, ref_key=voice, output_path=output_path, ref_audio_custom=ref_audio, ref_text_custom=ref_text)
-    else:
-        # Edge-TTS with cinematic -4% rate and -1Hz pitch
-        communicate = edge_tts.Communicate(text=text, voice=voice, rate="-4%", pitch="-1Hz")
-        await communicate.save(str(output_path))
-        return output_path
-
 def get_audio_duration(audio_path: Path) -> float:
     cmd = [
         FFPROBE, "-v", "error", "-show_entries", "format=duration",
@@ -638,6 +412,16 @@ def get_audio_duration(audio_path: Path) -> float:
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, check=True)
     return float(res.stdout.strip())
+
+def pad_audio_with_silence(audio_path: Path, seconds: float) -> Path:
+    """Appends a breathing pause so consecutive scenes don't run into each other."""
+    if seconds <= 0:
+        return audio_path
+    tmp = audio_path.with_name(f"{audio_path.stem}_padded{audio_path.suffix}")
+    cmd = [FFMPEG, "-y", "-i", str(audio_path), "-af", f"apad=pad_dur={seconds:.2f}", str(tmp)]
+    subprocess.run(cmd, check=True, capture_output=True)
+    os.replace(tmp, audio_path)
+    return audio_path
 
 async def generate_scene_image(visual_prompt: str, aspect: str, output_path: Path) -> Path:
     dims = ASPECT_RESOLUTIONS.get(aspect, ASPECT_RESOLUTIONS["9:16"])

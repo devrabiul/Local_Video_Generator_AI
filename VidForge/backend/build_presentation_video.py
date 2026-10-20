@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-import edge_tts
+import tts_engine
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SLIDES_DIR = BASE_DIR / "presentation_slides"
@@ -86,14 +86,18 @@ def get_audio_duration(file_path: Path) -> float:
     res = subprocess.run(cmd, capture_output=True, text=True, check=True)
     return float(res.stdout.strip())
 
+# Any '<engine>:<voice>' id, e.g. gemini:Charon, elevenlabs:<voice_id> or f5tts:bn_epic_male
+PRESENTATION_VOICE = os.environ.get("VIDFORGE_PRESENTATION_VOICE", "gemini:Charon")
+
 async def generate_voiceovers():
-    print("Generating Bengali voiceover for each slide using edge-tts...")
-    voice = "bn-BD-PradeepNeural"
+    print(f"Generating Bengali voiceover for each slide using {PRESENTATION_VOICE}...")
     for sc in SCENES:
         audio_file = TEMP_DIR / f"audio_{sc['id']}.mp3"
         print(f"Generating audio for Scene {sc['id']}...")
-        communicate = edge_tts.Communicate(sc["narration"], voice, rate="+0%", pitch="+0Hz")
-        await communicate.save(str(audio_file))
+        await tts_engine.generate_voiceover(
+            sc["narration"], PRESENTATION_VOICE, audio_file,
+            delivery="confident, clear product presenter", language="bn"
+        )
         dur = get_audio_duration(audio_file)
         sc["duration"] = max(dur + 0.8, 4.5)  # add breathing room
         sc["audio_file"] = audio_file

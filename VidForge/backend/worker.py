@@ -7,6 +7,7 @@ from pathlib import Path
 from loguru import logger
 from database import get_next_queued_job, update_job_status
 import ai_engine
+import tts_engine
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 JOBS_DIR = BASE_DIR / "jobs"
@@ -28,6 +29,7 @@ async def process_job(job: dict):
 
         # Step 1: Script & Scene Planning
         scenes = []
+        narrator_style = job.get("narrator_style") or ""
         if job.get("scenes_json") and job["scenes_json"] != "[]":
             try:
                 scenes = json.loads(job["scenes_json"])
@@ -45,6 +47,7 @@ async def process_job(job: dict):
             )
             scenes = plan.get("scenes", [])
             title = plan.get("title", job.get("title") or "Untitled Production")
+            narrator_style = plan.get("narrator_style") or narrator_style
             if not scenes:
                 raise ValueError(f"Ollama failed to generate {video_type} scenes")
         else:
@@ -52,14 +55,35 @@ async def process_job(job: dict):
 
         update_job_status(job_id, status="SCRIPTING", progress=25, current_step=f"Ready with {len(scenes)} scenes: {title}", scenes_json=json.dumps(scenes, ensure_ascii=False))
 
-        # Step 2: Voiceover generation (ElevenLabs / F5-TTS / Edge-TTS)
+        # Step 2: Voiceover generation (Gemini / ElevenLabs / F5-TTS)
         voice_label = job.get("voice", "neural")
         update_job_status(job_id, status="VOICEOVER", progress=30, current_step=f"Generating voiceover using {voice_label}...")
         scene_audios = []
         scene_durations = []
+        stitch_ids: list[str] = []  # ElevenLabs request stitching keeps the delivery continuous
         for i, sc in enumerate(scenes):
             audio_path = work_dir / f"scene_{i+1}.mp3"
-            await ai_engine.generate_voiceover(sc["narration"], job["voice"], audio_path)
+            update_job_status(job_id, status="VOICEOVER", progress=30 + int((i / len(scenes)) * 14), current_step=f"Voicing scene {i+1}/{len(scenes)}...")
+            await tts_engine.generate_voiceover(
+                sc["narration"],
+                job["voice"],
+                audio_path,
+                delivery=sc.get("delivery", ""),
+                narrator_style=narrator_style,
+                previous_text=scenes[i - 1]["narration"] if i > 0 else "",
+                next_text=scenes[i + 1]["narration"] if i + 1 < len(scenes) else "",
+                stitch_ids=stitch_ids,
+                language=job["language"]
+            )
+            # Breathing room between scenes; the scene clip follows the padded audio length
+            try:
+                pause = float(sc.get("pause_after", 0.6))
+            except (TypeError, ValueError):
+                pause = 0.6
+            pause = min(max(pause, 0.2), 2.0)
+            if i == len(scenes) - 1:
+                pause = max(pause, 1.0)
+            await asyncio.to_thread(ai_engine.pad_audio_with_silence, audio_path, pause)
             duration = await asyncio.to_thread(ai_engine.get_audio_duration, audio_path)
             sc["duration"] = duration
             scene_audios.append(audio_path)
