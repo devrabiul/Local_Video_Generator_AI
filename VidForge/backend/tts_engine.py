@@ -12,6 +12,7 @@ import re
 import subprocess
 import uuid
 from pathlib import Path
+from typing import Awaitable, Callable
 
 import httpx
 from loguru import logger
@@ -20,6 +21,38 @@ from ai_engine import BASE_DIR, COMFYUI_DIR, CONFIG_FILE, FFMPEG, FFPROBE, _defa
 
 ENGINES = ("gemini", "elevenlabs", "f5tts")
 DEFAULT_ENGINE = "gemini"
+
+def _extract_retry_delay(res: httpx.Response, attempt: int, default_delay: float = 25.0) -> float:
+    """Extracts wait time from 429/503 response headers or Google/ElevenLabs error payload."""
+    # 1. Standard Retry-After header (seconds)
+    retry_header = res.headers.get("retry-after")
+    if retry_header:
+        try:
+            return max(float(retry_header), 1.0)
+        except ValueError:
+            pass
+
+    # 2. Google RPC RetryInfo in JSON response
+    try:
+        data = res.json()
+        error = data.get("error", {})
+        for detail in error.get("details", []):
+            if isinstance(detail, dict) and str(detail.get("@type", "")).endswith("RetryInfo"):
+                delay_str = str(detail.get("retryDelay", ""))
+                if delay_str.endswith("s"):
+                    return max(float(delay_str[:-1]), 1.0)
+
+        # 3. Message regex: "retry in 44s", "retry after 44s", etc.
+        msg = error.get("message", "") or res.text
+        match = re.search(r"retry\s+(?:in|after)\s+([0-9]+(?:\.[0-9]+)?)\s*s", msg, re.IGNORECASE)
+        if match:
+            return max(float(match.group(1)), 1.0)
+    except Exception:
+        pass
+
+    # 4. Fallback backoff based on attempt count
+    return default_delay * (1.5 ** (attempt - 1))
+
 
 GEMINI_TTS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 GEMINI_MODEL = _setting("gemini_tts_model", "VIDFORGE_GEMINI_TTS_MODEL", "gemini-3.8-flash-tts")
@@ -116,10 +149,18 @@ def save_tts_config(data: dict) -> dict:
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     return get_tts_config()
 
+def _gemini_keys() -> list[str]:
+    raw = get_tts_config().get("gemini_api_key") or os.environ.get("GEMINI_API_KEY", "")
+    if not raw:
+        return []
+    return [k.strip() for k in re.split(r"[,;\n\r]+", str(raw)) if k.strip()]
+
 def _gemini_key() -> str:
-    return get_tts_config().get("gemini_api_key") or os.environ.get("GEMINI_API_KEY", "")
+    keys = _gemini_keys()
+    return keys[0] if keys else ""
 
 def _elevenlabs_key() -> str:
+
     return get_tts_config().get("elevenlabs_api_key") or os.environ.get("ELEVENLABS_API_KEY", "")
 
 def get_all_tts_engines() -> dict:
@@ -203,9 +244,16 @@ def _duration(path: Path) -> float:
 # Gemini TTS
 # ---------------------------------------------------------------------------
 
-async def generate_gemini_voiceover(text: str, voice: str, output_path: Path, style: str = "") -> Path:
-    api_key = _gemini_key()
-    if not api_key:
+async def generate_gemini_voiceover(
+    text: str,
+    voice: str,
+    output_path: Path,
+    style: str = "",
+    on_status: Callable[[str], Awaitable[None]] | None = None,
+    max_retries: int = 5
+) -> Path:
+    keys = _gemini_keys()
+    if not keys:
         raise ValueError("Gemini API key is required. Add it in the voice API key settings.")
 
     content = {"type": "text", "text": _render_cues(text, GEMINI_TAGS)}
@@ -217,15 +265,74 @@ async def generate_gemini_voiceover(text: str, voice: str, output_path: Path, st
         "response_format": {"type": "audio"},
         "generation_config": {"speech_config": [{"voice": voice}]}
     }
-    async with httpx.AsyncClient(timeout=180.0) as client:
-        res = await client.post(GEMINI_TTS_URL, json=payload, headers={"x-goog-api-key": api_key})
-    if res.status_code != 200:
+
+    last_error = None
+    key_idx = 0
+    attempt = 1
+
+    while attempt <= max_retries and key_idx < len(keys):
+        api_key = keys[key_idx]
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            res = await client.post(GEMINI_TTS_URL, json=payload, headers={"x-goog-api-key": api_key})
+
+        if res.status_code == 200:
+            break
+
         err_msg = res.text
         try:
             err_msg = res.json().get("error", {}).get("message") or res.text
         except Exception:
             pass
+
+        # Check for 429 Rate Limit or 503 Server Unavailable
+        is_rate_limit = (
+            res.status_code in (429, 503)
+            or "rate limit" in err_msg.lower()
+            or "resource_exhausted" in err_msg.lower()
+            or "quota" in err_msg.lower()
+        )
+        if is_rate_limit:
+            delay = _extract_retry_delay(res, attempt, default_delay=30.0)
+
+            # If daily quota exceeded (> 120s wait or daily limit in message)
+            if delay > 120.0 or "day" in err_msg.lower():
+                if key_idx + 1 < len(keys):
+                    key_idx += 1
+                    logger.warning(f"Gemini API key #{key_idx} daily limit hit. Rotating to key #{key_idx + 1}...")
+                    if on_status:
+                        await on_status(f"Gemini key limit reached. Switching to backup key #{key_idx + 1}...")
+                    continue
+                else:
+                    raise RuntimeError(
+                        "Gemini TTS Free Tier daily limit reached (10 requests/day). "
+                        "To continue: (1) Add another Gemini API key separated by comma in Voice Settings, "
+                        "(2) Upgrade to Pay-As-You-Go at https://aistudio.google.com, or "
+                        "(3) Switch to ElevenLabs or local F5-TTS."
+                    )
+
+            if attempt < max_retries:
+                wait_seconds = max(delay + 2.0, 5.0)
+                logger.warning(
+                    f"Gemini TTS rate limited ({res.status_code}). Attempt {attempt}/{max_retries}. "
+                    f"Waiting {wait_seconds:.1f}s before retry..."
+                )
+                remaining = int(round(wait_seconds))
+                while remaining > 0:
+                    if on_status:
+                        await on_status(
+                            f"Gemini TTS rate limit cooldown: waiting {remaining}s before retry ({attempt}/{max_retries})..."
+                        )
+                    step = min(remaining, 5)
+                    await asyncio.sleep(step)
+                    remaining -= step
+
+                last_error = f"Gemini TTS error ({res.status_code}): {err_msg}"
+                attempt += 1
+                continue
+
         raise RuntimeError(f"Gemini TTS error ({res.status_code}): {err_msg}")
+    else:
+        raise RuntimeError(last_error or f"Gemini TTS failed after {max_retries} attempts.")
 
     audio_items = [
         item
@@ -257,7 +364,9 @@ async def generate_elevenlabs_voiceover(
     previous_text: str = "",
     next_text: str = "",
     stitch_ids: list[str] | None = None,
-    language: str | None = None
+    language: str | None = None,
+    on_status: Callable[[str], Awaitable[None]] | None = None,
+    max_retries: int = 4
 ) -> Path:
     api_key = _elevenlabs_key()
     if not api_key:
@@ -291,21 +400,43 @@ async def generate_elevenlabs_voiceover(
         payload["next_text"] = plain_text(next_text)
 
     headers = {"xi-api-key": api_key.strip(), "Content-Type": "application/json", "Accept": "audio/mpeg"}
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        res = await client.post(f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}", json=payload, headers=headers)
-    if res.status_code != 200:
+    last_error = None
+    res = None
+    for attempt in range(1, max_retries + 1):
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            res = await client.post(f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}", json=payload, headers=headers)
+        if res.status_code == 200:
+            break
         err_msg = res.text
         try:
             err_json = res.json()
             err_msg = err_json.get("detail", {}).get("message") or err_json.get("message") or res.text
         except Exception:
             pass
+
+        if res.status_code in (429, 503) and attempt < max_retries:
+            delay = _extract_retry_delay(res, attempt, default_delay=15.0)
+            wait_seconds = max(delay + 1.0, 5.0)
+            logger.warning(f"ElevenLabs rate limited ({res.status_code}). Attempt {attempt}/{max_retries}. Waiting {wait_seconds:.1f}s...")
+            remaining = int(round(wait_seconds))
+            while remaining > 0:
+                if on_status:
+                    await on_status(f"ElevenLabs rate limit cooldown: waiting {remaining}s before retry ({attempt}/{max_retries})...")
+                step = min(remaining, 5)
+                await asyncio.sleep(step)
+                remaining -= step
+            last_error = f"ElevenLabs error ({res.status_code}): {err_msg}"
+            continue
+
         raise RuntimeError(f"ElevenLabs error ({res.status_code}): {err_msg}")
+    else:
+        raise RuntimeError(last_error or f"ElevenLabs failed after {max_retries} attempts.")
 
     output_path.write_bytes(res.content)
     if stitch_ids is not None and res.headers.get("request-id"):
         stitch_ids.append(res.headers["request-id"])
     return output_path
+
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +573,8 @@ async def generate_voiceover(
     previous_text: str = "",
     next_text: str = "",
     stitch_ids: list[str] | None = None,
-    language: str | None = None
+    language: str | None = None,
+    on_status: Callable[[str], Awaitable[None]] | None = None
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     engine, name = split_voice(voice)
@@ -450,13 +582,14 @@ async def generate_voiceover(
 
     if engine == "gemini":
         style = "; ".join(part for part in (narrator_style, delivery) if part)
-        return await generate_gemini_voiceover(text, name, output_path, style=style)
+        return await generate_gemini_voiceover(text, name, output_path, style=style, on_status=on_status)
     if engine == "elevenlabs":
         return await generate_elevenlabs_voiceover(
             text, name, output_path, delivery=delivery, previous_text=previous_text,
-            next_text=next_text, stitch_ids=stitch_ids, language=language
+            next_text=next_text, stitch_ids=stitch_ids, language=language, on_status=on_status
         )
     return await generate_f5_voiceover(text, name, output_path)
+
 
 async def generate_voice_sample(voice: str, engine: str, language: str = "bn") -> str:
     """Generates (and caches) a short expressive preview for a voice."""

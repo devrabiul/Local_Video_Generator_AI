@@ -95,3 +95,19 @@ def purge_project_files(project_id: str):
         except OSError as e:
             logger.warning(f"Could not remove {t}: {e}")
     logger.info(f"Purged all assets for project {project_id}")
+
+
+def purge_all_project_files():
+    """Deletes all project files in jobs/ and output/ directories."""
+    for root in (JOBS_DIR, OUTPUT_DIR):
+        if root.exists():
+            for item in root.iterdir():
+                try:
+                    if item.is_dir() and (is_valid_id(item.name) or item.name.startswith("job_")):
+                        shutil.rmtree(item, ignore_errors=True)
+                    elif item.is_file() and any(item.name.startswith(p) for p in ("job_", "video_", "thumb_")):
+                        item.unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning(f"Could not purge {item}: {e}")
+    logger.info("Purged all project assets")
+

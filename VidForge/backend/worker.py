@@ -115,6 +115,11 @@ async def process_job(job: dict):
             else:
                 update_job_status(job_id, status="VOICEOVER", progress=progress, current_step=f"Voicing scene {i+1}/{len(scenes)}...")
                 tmp = work_dir / f"tmp_{audio_path.name}"
+
+                async def _on_voice_status(msg: str):
+                    _checkpoint(job_id)
+                    update_job_status(job_id, status="VOICEOVER", progress=progress, current_step=msg)
+
                 await tts_engine.generate_voiceover(
                     sc["narration"],
                     job["voice"],
@@ -124,7 +129,8 @@ async def process_job(job: dict):
                     previous_text=scenes[i - 1]["narration"] if i > 0 else "",
                     next_text=scenes[i + 1]["narration"] if i + 1 < len(scenes) else "",
                     stitch_ids=stitch_ids,
-                    language=job["language"]
+                    language=job["language"],
+                    on_status=_on_voice_status
                 )
                 await asyncio.to_thread(ai_engine.pad_audio_with_silence, tmp, pause)
                 os.replace(tmp, audio_path)

@@ -379,7 +379,11 @@ export default function App() {
   const [thumbStudioJobId, setThumbStudioJobId] = useState<string | null>(null);
   const [reviseTarget, setReviseTarget] = useState<{ id: string; mode: "refine" | "regenerate" } | null>(null);
   const [justFinishedId, setJustFinishedId] = useState<string | null>(null);
+  const [jobToDelete, setJobToDelete] = useState<Job | null>(null);
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const jobStatusRef = useRef<Record<string, Job['status']>>({});
+
 
   // Ollama Story Studio State
   const [ollamaModel, setOllamaModel] = useState<string>("qwen3.5:9b");
@@ -1049,27 +1053,85 @@ export default function App() {
     setTimeout(() => setCopySuccess(false), 2500);
   };
 
-  // Delete a project and every file it produced
-  const handleDelete = async (job: Job) => {
-    const rendering = job.status !== 'DONE' && job.status !== 'FAILED';
-    const message = `Delete the project "${job.title}"?\n\n`
-      + "This permanently removes its video, thumbnail, script, voiceover, images and every other file it created."
-      + (rendering ? "\nThe render in progress will be stopped." : "");
-    if (!confirm(message)) return;
+  // Open project delete confirmation modal
+  const handleDelete = (job: Job) => {
+    setJobToDelete(job);
+  };
+
+  // Perform project deletion after user confirmation
+  const confirmDeleteProject = async (job: Job) => {
+    setIsDeleting(true);
     try {
       const res = await fetch(`${API_BASE}/api/jobs/${job.id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
       setJobs(prev => prev.filter(j => j.id !== job.id));
       if (justFinishedId === job.id) setJustFinishedId(null);
-    } catch (e) {
+      if (reviseTarget?.id === job.id) setReviseTarget(null);
+      if (thumbStudioJobId === job.id) setThumbStudioJobId(null);
+      setDismissedFailedJobIds(prev => prev.filter(id => id !== job.id));
+      setJobToDelete(null);
+      fetchJobs();
+    } catch (e: any) {
       console.error("Delete failed", e);
-      alert("Could not delete the project. Is the backend running?");
+      alert(`Could not delete the project: ${e.message || e}`);
+    } finally {
+      setIsDeleting(false);
     }
   };
+
+  // Open delete all projects confirmation modal
+  const handleDeleteAll = () => {
+    if (jobs.length === 0) return;
+    setShowDeleteAllConfirm(true);
+  };
+
+  // Perform delete all projects after user confirmation
+  const confirmDeleteAllProjects = async () => {
+    setIsDeleting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/jobs`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      setJobs([]);
+      setJustFinishedId(null);
+      setReviseTarget(null);
+      setThumbStudioJobId(null);
+      setDismissedFailedJobIds([]);
+      setShowDeleteAllConfirm(false);
+      fetchJobs();
+    } catch (e: any) {
+      console.error("Delete all failed", e);
+      alert(`Could not delete all projects: ${e.message || e}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
 
   // Hides the banner only; the failed project stays in Projects so it can be regenerated
   const handleDismissFailed = (jobId: string) => {
     setDismissedFailedJobIds(prev => [...prev, jobId]);
+  };
+
+  // Resumes a failed or canceled project from where it left off
+  const handleResumeFailed = async (jobId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/jobs/${jobId}/retry`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      setDismissedFailedJobIds(prev => prev.filter(id => id !== jobId));
+      fetchJobs();
+    } catch (e: any) {
+      console.error("Resume failed", e);
+      alert(`Could not resume project: ${e.message}`);
+    }
   };
 
   const downloadUrl = (jobId: string, kind: "video" | "thumbnail") => `${API_BASE}/api/jobs/${jobId}/download/${kind}`;
@@ -1682,6 +1744,15 @@ export default function App() {
                     <a className="btn btn-ghost" href={downloadUrl(justFinishedJob.id, "video")}>
                       <Download size={14} /> Download
                     </a>
+                    <button
+                      type="button"
+                      className="btn btn-danger-ghost"
+                      onClick={() => handleDelete(justFinishedJob)}
+                      style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}
+                      title="Delete this project"
+                    >
+                      <Trash2 size={14} /> Delete
+                    </button>
                   </div>
                 </div>
               )}
@@ -1707,9 +1778,21 @@ export default function App() {
                   <div style={{ fontSize: 12, color: 'var(--t-body)', lineHeight: 1.4, wordBreak: 'break-word', maxHeight: 90, overflowY: 'auto', background: 'var(--well)', padding: '6px 10px', borderRadius: 6 }}>
                     {latestFailedJob.error_message || 'An error occurred during video production.'}
                   </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 10, alignItems: 'center' }}>
+                    <button type="button" className="btn btn-primary" onClick={() => handleResumeFailed(latestFailedJob.id)}>
+                      <RefreshCw size={14} /> Resume Job
+                    </button>
                     <button type="button" className="btn btn-ghost" onClick={() => setReviseTarget({ id: latestFailedJob.id, mode: "regenerate" })}>
-                      <RefreshCw size={14} /> Try again
+                      <Wand2 size={14} /> Regenerate
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger-ghost"
+                      onClick={() => handleDelete(latestFailedJob)}
+                      style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px', fontSize: 12 }}
+                      title="Permanently delete this failed project"
+                    >
+                      <Trash2 size={13} /> Delete Project
                     </button>
                   </div>
                 </div>
@@ -1730,7 +1813,18 @@ export default function App() {
                         </h3>
                       </div>
                     </div>
-                    {getStatusBadge(activeJob.status)}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <button
+                        type="button"
+                        className="btn btn-danger-ghost"
+                        onClick={() => handleDelete(activeJob)}
+                        style={{ fontSize: 11, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 5 }}
+                        title="Cancel this running project and delete its files"
+                      >
+                        <Trash2 size={13} /> Cancel & Delete
+                      </button>
+                      {getStatusBadge(activeJob.status)}
+                    </div>
                   </div>
 
                   {/* Progress Bar & Current Step */}
@@ -2724,6 +2818,19 @@ export default function App() {
                 <p className="page-sub">
                   Every video you generate is saved here as a project. Design its thumbnail, refine or regenerate it, and download the video and thumbnail any time.
                 </p>
+                {jobs.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <button
+                      type="button"
+                      className="btn btn-danger-ghost"
+                      onClick={handleDeleteAll}
+                      style={{ fontSize: 12, padding: '5px 12px', display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600 }}
+                      title="Permanently delete all projects and their files"
+                    >
+                      <Trash2 size={13} /> Delete All Projects ({jobs.length})
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="page-stats">
                 <div><strong>{jobs.length}</strong><span>Projects</span></div>
@@ -2769,9 +2876,22 @@ export default function App() {
                       </div>
 
                       <div className="gallery-body">
-                        <div className="project-title-row">
-                          <h4 className="gallery-title" title={cj.title}>{cj.title}</h4>
-                          {cj.status !== 'DONE' && getStatusBadge(cj.status)}
+                        <div className="project-title-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                          <h4 className="gallery-title" title={cj.title} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {cj.title}
+                          </h4>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                            {cj.status !== 'DONE' && getStatusBadge(cj.status)}
+                            <button
+                              type="button"
+                              className="btn btn-icon btn-danger-ghost"
+                              onClick={() => handleDelete(cj)}
+                              title={`Delete project "${cj.title}"`}
+                              style={{ color: 'var(--a-rose)', width: 28, height: 28, padding: 0 }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
                         <div className="gallery-meta">
                           {typeInfo && <span className="chip chip-primary"><typeInfo.Icon size={11} /> {typeInfo.desc}</span>}
@@ -2833,6 +2953,18 @@ export default function App() {
                           >
                             <ImageIcon size={14} /> Design thumbnail
                           </button>
+                          {cj.status === 'FAILED' && (
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              style={{ flex: 1 }}
+                              onClick={() => handleResumeFailed(cj.id)}
+                              disabled={busy}
+                              title="Resume this failed project from where it stopped"
+                            >
+                              <RefreshCw size={14} /> Resume
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="btn btn-ghost"
@@ -2841,10 +2973,17 @@ export default function App() {
                             disabled={busy}
                             title={busy ? "Wait for the current render to finish" : "Refine with a prompt or regenerate"}
                           >
-                            <Wand2 size={14} /> Refine / Redo
+                            <Wand2 size={14} /> {cj.status === 'FAILED' ? "Redo" : "Refine / Redo"}
                           </button>
-                          <button type="button" className="btn btn-icon btn-danger-ghost" onClick={() => handleDelete(cj)} title="Delete project and all its files" aria-label={`Delete ${cj.title}`}>
-                            <Trash2 size={14} />
+                          <button
+                            type="button"
+                            className="btn btn-danger-ghost"
+                            onClick={() => handleDelete(cj)}
+                            title={`Delete project "${cj.title}" and all its files`}
+                            aria-label={`Delete ${cj.title}`}
+                            style={{ color: 'var(--a-rose)', display: 'inline-flex', alignItems: 'center', gap: 4, padding: '7px 10px', fontSize: 12, fontWeight: 600 }}
+                          >
+                            <Trash2 size={13} /> Delete
                           </button>
                         </div>
                       </div>
@@ -3037,6 +3176,102 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Delete Single Project Confirmation Modal */}
+      {jobToDelete && (
+        <div className="studio-overlay" role="dialog" aria-modal="true" style={{ zIndex: 10000 }}>
+          <div className="glass-panel modal-panel" style={{ maxWidth: 440, padding: 24, textAlign: 'left' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+              <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'rgb(244 63 94 / 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--a-rose)', flexShrink: 0 }}>
+                <Trash2 size={20} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--t-strong)' }}>
+                  Delete Project?
+                </h3>
+                <span style={{ fontSize: 12, color: 'var(--t-muted)' }}>
+                  This action permanently removes all files
+                </span>
+              </div>
+            </div>
+
+            <div style={{ background: 'var(--well)', padding: 12, borderRadius: 8, fontSize: 13, color: 'var(--t-body)', marginBottom: 18, lineHeight: 1.5 }}>
+              Are you sure you want to delete <strong>"{jobToDelete.title}"</strong>?
+              <div style={{ fontSize: 11.5, color: 'var(--t-muted)', marginTop: 6 }}>
+                The video, thumbnail, voiceover audio, images, and storyboard will be deleted permanently.
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setJobToDelete(null)}
+                disabled={isDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{ background: 'var(--a-rose)', color: '#fff', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, border: 'none', padding: '8px 14px', borderRadius: 8, cursor: 'pointer' }}
+                onClick={() => confirmDeleteProject(jobToDelete)}
+                disabled={isDeleting}
+              >
+                <Trash2 size={14} />
+                {isDeleting ? "Deleting..." : "Delete Project"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete ALL Projects Confirmation Modal */}
+      {showDeleteAllConfirm && (
+        <div className="studio-overlay" role="dialog" aria-modal="true" style={{ zIndex: 10000 }}>
+          <div className="glass-panel modal-panel" style={{ maxWidth: 460, padding: 24, textAlign: 'left' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+              <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'rgb(244 63 94 / 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--a-rose)', flexShrink: 0 }}>
+                <Trash2 size={20} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--t-strong)' }}>
+                  Delete All Projects?
+                </h3>
+                <span style={{ fontSize: 12, color: 'var(--t-muted)' }}>
+                  Permanently wipe all {jobs.length} projects
+                </span>
+              </div>
+            </div>
+
+            <div style={{ background: 'var(--well)', padding: 12, borderRadius: 8, fontSize: 13, color: 'var(--t-body)', marginBottom: 18, lineHeight: 1.5 }}>
+              Are you sure you want to delete <strong>ALL {jobs.length} projects</strong>? Every video, audio, image and asset on this computer will be permanently deleted.
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setShowDeleteAllConfirm(false)}
+                disabled={isDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{ background: 'var(--a-rose)', color: '#fff', display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, border: 'none', padding: '8px 14px', borderRadius: 8, cursor: 'pointer' }}
+                onClick={confirmDeleteAllProjects}
+                disabled={isDeleting}
+              >
+                <Trash2 size={14} />
+                {isDeleting ? "Deleting All..." : `Yes, Delete All (${jobs.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {keyModal && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>

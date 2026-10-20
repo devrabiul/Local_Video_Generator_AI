@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from typing import Literal
 from pydantic import BaseModel, Field
 from database import (
-    init_db, add_job, get_all_jobs, get_job, delete_job, requeue_job, update_job_fields, RUNNING_STATUSES
+    init_db, add_job, get_all_jobs, get_job, delete_job, delete_all_jobs, requeue_job, update_job_fields, RUNNING_STATUSES
 )
 from worker import worker_loop
 import ai_engine
@@ -357,6 +357,14 @@ def get_job_detail(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
+@app.delete("/api/jobs")
+def remove_all_jobs():
+    """Deletes all projects and every asset they produced."""
+    jobs = get_all_jobs()
+    delete_all_jobs()
+    projects.purge_all_project_files()
+    return {"ok": True, "count": len(jobs)}
+
 @app.delete("/api/jobs/{job_id}")
 def remove_job(job_id: str):
     """Deletes a project and every asset it produced. A render in progress is stopped by the worker."""
@@ -401,6 +409,14 @@ def regenerate_project(job_id: str, req: RegenerateRequest):
                 scenes_json="[]" if req.mode == "script" else None)
     return {"id": job_id, "status": "QUEUED"}
 
+@app.post("/api/jobs/{job_id}/retry")
+def retry_project(job_id: str):
+    job = _project_or_404(job_id)
+    if job["status"] in ("QUEUED", *RUNNING_STATUSES):
+        raise HTTPException(status_code=409, detail="This project is already rendering.")
+    requeue_job(job_id, step="Resuming project from last saved state...")
+    return {"id": job_id, "status": "QUEUED"}
+
 @app.post("/api/jobs/{job_id}/refine")
 def refine_project(job_id: str, req: RefineRequest):
     job = _revisable_project(job_id)
@@ -408,6 +424,7 @@ def refine_project(job_id: str, req: RefineRequest):
         raise HTTPException(status_code=400, detail="This project has no script to refine yet. Regenerate it instead.")
     requeue_job(job_id, step="Queued to refine with your instructions", refine_instruction=req.instruction.strip())
     return {"id": job_id, "status": "QUEUED"}
+
 
 @app.get("/api/jobs/{job_id}/download/{kind}")
 def download_project_file(job_id: str, kind: Literal["video", "thumbnail"]):

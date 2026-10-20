@@ -161,6 +161,12 @@ def delete_job(job_id: str):
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         conn.commit()
 
+def delete_all_jobs():
+    with get_connection() as conn:
+        conn.execute("DELETE FROM jobs")
+        conn.commit()
+
+
 def update_job_fields(job_id: str, **fields):
     unknown = set(fields) - EDITABLE_FIELDS
     if unknown:

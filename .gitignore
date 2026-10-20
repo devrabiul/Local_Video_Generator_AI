@@ -51,6 +51,7 @@ build/
 tts_config.json
 # Local settings with API keys - copy VidForge/backend/config.example.json to create it
 VidForge/backend/config.json
+VidForge/config.json
 *.log
 .env
 .env.local
