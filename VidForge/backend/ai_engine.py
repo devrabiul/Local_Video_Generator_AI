@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -185,6 +186,13 @@ VIDEO_TYPES_CONFIG = {
         "visual_guidelines": "Bright colorful 3D animated storybook style, soft rounded characters, cheerful lighting, Pixar-like friendly environments.",
         "default_music": "emotional_drama"
     },
+    "animation": {
+        "name": "3D Animated Film & Cartoon",
+        "persona": "You are a master animation director and Pixar/DreamWorks lead visual artist.",
+        "narration_guidelines": "Expressive, animated, emotionally rich and engaging character-driven storytelling with lively pacing and a sense of wonder.",
+        "visual_guidelines": "High-end 3D animated CGI feature film look, Pixar/Disney style character modeling, detailed skin and fabric textures, expressive eyes, vibrant cinematic lighting, richly detailed magical cartoon environments, ultra-high coherence.",
+        "default_music": "emotional_drama"
+    },
     "mystery": {
         "name": "Mystery & Unsolved Cases",
         "persona": "You are a gripping mystery storyteller and investigative documentary host.",
@@ -301,7 +309,7 @@ Requirements for each scene:
 3. "pause_after": Seconds of silence after this scene: 0.3 for quick flow, 0.6 normally, 1.0-1.5 before a dramatic turn and after the final scene.
 4. "visual_prompt": A unique, distinct visual description written in English for 8K photorealistic image generation (ComfyUI Z-Image-Turbo). Vary camera angles, subjects, macro details, and perspectives between scenes!
    Visual Guidelines: {cfg['visual_guidelines']}
-5. "motion_prompt": A camera motion description in English for smooth Ken Burns cinematic panning/zooming (e.g. "slow cinematic push in", "gentle pan right", "dynamic zoom out", "tilt up").
+5. "motion_prompt": Vivid description in English for AI video animation & camera movement (e.g. "gentle cinematic push in, character blinking and smiling warmly, soft hair movement in breeze", "slow pan right across magical landscape, floating embers in air", "dynamic cinematic zoom in on character's expressive face").
 
 Respond ONLY with valid JSON in this exact structure:
 {{
@@ -590,14 +598,14 @@ async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, r
             "class_type": "CLIPTextEncode",
             "inputs": {
                 "clip": ["38", 0],
-                "text": f"{motion_prompt}, cinematic motion, photorealistic, fluid natural movement, dynamic studio lighting, highly detailed"
+                "text": f"{motion_prompt}, cinematic high production quality, fluid natural movement, consistent character identity, dynamic studio lighting, highly detailed"
             }
         },
         "7": {
             "class_type": "CLIPTextEncode",
             "inputs": {
                 "clip": ["38", 0],
-                "text": "blurry, static, distorted, artifacts, low quality, jittery, disfigured, deformed, noisy"
+                "text": "blurry, static, distorted, artifacts, low quality, jittery, disfigured, deformed, noisy, morphing, melted faces, extra limbs, bad anatomy, frame warping"
             }
         },
         "54": {
@@ -676,13 +684,13 @@ async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, r
     }
 
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=600.0) as client:
             r = await client.post(f"{COMFYUI_URL}/prompt", json={"prompt": wan_prompt})
             r.raise_for_status()
             prompt_id = r.json()["prompt_id"]
 
             t0 = time.time()
-            while time.time() - t0 < 240:
+            while time.time() - t0 < 500:
                 hist_res = await client.get(f"{COMFYUI_URL}/history/{prompt_id}")
                 hist = hist_res.json()
                 if prompt_id in hist:
@@ -856,8 +864,53 @@ def generate_srt_subtitles(scenes: list[dict], scene_durations: list[float], out
         sub_idx += 1
         current_time += dur
 
-    output_srt.write_text("\n".join(lines), encoding="utf-8")
-    return output_srt
+def format_ass_time(seconds: float) -> str:
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    centis = min(99, int(round((seconds - int(seconds)) * 100)))
+    return f"{hrs:d}:{mins:02d}:{secs:02d}.{centis:02d}"
+
+def generate_ass_subtitles(scenes: list[dict], scene_durations: list[float], aspect: str, output_ass: Path) -> Path:
+    """Generates standard UTF-8 ASS subtitles with Nirmala UI font for 100% accurate Bengali text shaping and optimal font scaling."""
+    dims = ASPECT_RESOLUTIONS.get(aspect, ASPECT_RESOLUTIONS["9:16"])
+    rw, rh = dims["render_w"], dims["render_h"]
+    is_vertical = rh > rw
+    # Balanced font size: elegant, modern, highly legible
+    font_size = 46 if is_vertical else 38
+    margin_v = 150 if is_vertical else 80
+    outline = 2.8 if is_vertical else 2.2
+
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {rw}
+PlayResY: {rh}
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Nirmala UI,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,{outline:.1f},1.2,2,40,40,{margin_v},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    dialogues = []
+    current_time = 0.0
+    for sc, dur in zip(scenes, scene_durations):
+        raw_text = sc.get("narration", "")
+        clean_text = re.sub(r"\[[^\]]+\]", "", raw_text)
+        clean_text = re.sub(r"\s+", " ", clean_text).strip()
+        if not clean_text:
+            current_time += dur
+            continue
+
+        start_time = current_time
+        end_time = max(start_time + 0.5, current_time + dur - 0.08)
+        dialogues.append(f"Dialogue: 0,{format_ass_time(start_time)},{format_ass_time(end_time)},Default,,0,0,0,,{clean_text}")
+        current_time += dur
+
+    output_ass.write_text(header + "\n".join(dialogues) + "\n", encoding="utf-8")
+    return output_ass
 
 
 def assemble_final_video(
@@ -903,8 +956,10 @@ def assemble_final_video(
     use_subs = enable_subtitles and subtitles_file is not None and subtitles_file.exists() and subtitles_file.stat().st_size > 10
     if use_subs:
         logger.info(f"Burning subtitles onto video from {subtitles_file.name}...")
-        sub_name = subtitles_file.name
-        vf_sub = f"subtitles={sub_name}:force_style='FontName=Arial,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=2.2,Shadow=1.0,MarginV=35,Alignment=2'"
+        posix_path = subtitles_file.resolve().as_posix()
+        escaped_path = posix_path.replace(":", r"\:")
+        filter_name = "ass" if subtitles_file.suffix.lower() == ".ass" else "subtitles"
+        vf_sub = f"{filter_name}=filename='{escaped_path}'"
         video_args = ["-vf", vf_sub, *video_encoder_args(20), "-pix_fmt", "yuv420p"]
     else:
         video_args = ["-c:v", "copy"]

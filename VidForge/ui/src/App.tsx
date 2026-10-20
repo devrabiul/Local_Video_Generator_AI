@@ -101,11 +101,12 @@ const ENGINE_OPTIONS: { id: TtsEngine; label: string; sub: string; accent: strin
 
 type VideoType =
   | "story" | "news" | "presentation" | "explainer" | "commercial" | "reel"
-  | "documentary" | "biography" | "motivational" | "travel" | "kids" | "mystery";
+  | "documentary" | "biography" | "motivational" | "travel" | "kids" | "animation" | "mystery";
 
 // Production types; ids must match VIDEO_TYPES_CONFIG in backend/ai_engine.py
 const VIDEO_TYPES: { id: VideoType; label: string; desc: string; Icon: LucideIcon; music: string }[] = [
   { id: "story", label: "গল্প / ইতিহাস", desc: "Cinematic Story", Icon: Clapperboard, music: "cinematic_epic" },
+  { id: "animation", label: "অ্যানিমেশন / কার্টুন", desc: "3D Cartoon & Anime", Icon: Sparkles, music: "emotional_drama" },
   { id: "news", label: "সংবাদ বুলেটিন", desc: "News & Report", Icon: Newspaper, music: "cinematic_epic" },
   { id: "documentary", label: "ডকুমেন্টারি", desc: "Nature & World", Icon: Camera, music: "emotional_drama" },
   { id: "biography", label: "জীবনী", desc: "Life Story", Icon: UserRound, music: "ancient_history" },
@@ -241,6 +242,20 @@ const FORMAT_INSPIRATIONS: Record<string, Array<{ title: string; lang: string; p
       prompt: "বনের মাঠে অহংকারী খরগোশ আর ধীর কিন্তু ধৈর্যশীল কচ্ছপের মজার দৌড় প্রতিযোগিতা। বন্ধুদের সাহায্য, পরিশ্রম ও ধৈর্যের জয় — শেষে একটি সুন্দর নৈতিক শিক্ষা।"
     }
   ],
+  animation: [
+    {
+      title: "জাদুর বনের খুদে রোবট",
+      lang: "bn",
+      duration: 60,
+      prompt: "একটি ঘন জাদুর বনে পথ হারিয়ে ফেলা এক ছোট্ট বন্ধুত্বপূর্ণ এআই রোবটের রোমাঞ্চকর অভিযান। পিক্সার স্টাইলের কিউট ক্যারেক্টার ডিজাইন, বনের পশুপাখিদের সাথে বন্ধুত্ব এবং তার বাড়ি ফিরে যাওয়ার সুন্দর গল্প।"
+    },
+    {
+      title: "চাঁদের দেশে ছোট্ট চড়ুই",
+      lang: "bn",
+      duration: 60,
+      prompt: "একটি ছোট্ট দুঃসাহসী চড়ুই পাখির চাঁদে যাওয়ার রঙিন স্বপ্ন। চমৎকার 3D কার্টুন অ্যানিমেশন, রাতের তারাভরা আকাশ এবং স্বপ্ন পূরণের মিষ্টি গল্প।"
+    }
+  ],
   mystery: [
     {
       title: "বারমুডা ট্রায়াঙ্গলের রহস্য",
@@ -253,6 +268,7 @@ const FORMAT_INSPIRATIONS: Record<string, Array<{ title: string; lang: string; p
 
 const PROMPT_PLACEHOLDERS: Record<string, string> = {
   story: "এখানে আপনার গল্প বা ঐতিহাসিক ঘটনাটি বিস্তারিত লিখুন (যেমন: সুলতান সুলেমান, কনস্টান্টিনোপল, বা কোনো বীরত্বগাথা)...",
+  animation: "অ্যানিমেটেড ফিল্ম বা কার্টুনের গল্প, চরিত্রদের চেহারা ও রূপরেখা লিখুন (যেমন: পিক্সার স্টাইলের খুদে রোবট, রূপকথার ড্রাগন)...",
   news: "আজকের গুরুত্বপূর্ণ সংবাদ বা অনুসন্ধানী প্রতিবেদনের মূল তথ্য ও ঘটনা লিখুন (যেমন: নতুন প্রযুক্তি আবিষ্কার, বাজেট ঘোষণা, সাম্প্রতিক আন্তর্জাতিক ঘটনা)...",
   presentation: "আপনার প্রজেক্ট বা ব্যবসার নাম, মূল সমস্যা, প্রযুক্তিগত আর্কিটেকচার ও সমাধানের পয়েন্টগুলো লিখুন...",
   explainer: "যে জটিল বা শিক্ষণীয় বিষয়টি সহজভাবে ভেঙে বোঝাতে চান তা লিখুন (যেমন: কোয়ান্টাম কম্পিউটিং কীভাবে কাজ করে, ব্ল্যাক হোল কী)...",
@@ -268,6 +284,7 @@ const PROMPT_PLACEHOLDERS: Record<string, string> = {
 
 const PROMPT_LABELS: Record<string, string> = {
   story: "গল্প বা ঐতিহাসিক কাহিনী (Story Concept):",
+  animation: "কার্টুন বা অ্যানিমেশনের গল্প (Cartoon / Animation Concept):",
   news: "সংবাদের বিষয়বস্তু বা হেডলাইন (News Topic / Reporting Fact):",
   presentation: "প্রজেক্টের মূল বিষয়বস্তু ও বিবরণ (Project Pitch / Tech Demo):",
   explainer: "শিক্ষণীয় বিষয়ের বিবরণ (Explainer / Educational Topic):",

@@ -174,7 +174,8 @@ async def process_job(job: dict):
             if vid_path.exists():
                 update_job_status(job_id, status="ANIMATING_VIDEO", progress=progress, current_step=f"Reusing camera motion for scene {i+1}/{len(scenes)}...")
             else:
-                update_job_status(job_id, status="ANIMATING_VIDEO", progress=progress, current_step=f"Composing camera motion for scene {i+1}/{len(scenes)}...")
+                step_text = f"Generating Wan 2.1 AI neural video for scene {i+1}/{len(scenes)} (ComfyUI)..." if motion_mode == "wan" else f"Composing camera motion for scene {i+1}/{len(scenes)}..."
+                update_job_status(job_id, status="ANIMATING_VIDEO", progress=progress, current_step=step_text)
                 tmp = work_dir / f"tmp_{vid_path.name}"
                 await ai_engine.animate_scene(
                     image_path=img_path,
@@ -196,8 +197,10 @@ async def process_job(job: dict):
 
         # Subtitle processing
         enable_subtitles = bool(job.get("enable_subtitles", 1))
+        ass_path = work_dir / "subtitles.ass"
         srt_path = work_dir / "subtitles.srt"
         if enable_subtitles:
+            ai_engine.generate_ass_subtitles(scenes, scene_durations, aspect, ass_path)
             ai_engine.generate_srt_subtitles(scenes, scene_durations, srt_path)
             try:
                 out_srt = projects.new_output_path(job_id, "subtitles", ".srt")
@@ -216,7 +219,7 @@ async def process_job(job: dict):
             voice_volume=100 if job.get("voice_volume") is None else int(job["voice_volume"]),
             music_ducking=bool(job.get("music_ducking", 1)),
             enable_subtitles=enable_subtitles,
-            subtitles_file=srt_path if enable_subtitles else None,
+            subtitles_file=ass_path if enable_subtitles else None,
         )
 
         latest = get_job(job_id)
