@@ -284,15 +284,20 @@ Strict Timing & High-Retention Pacing Rules:
 - Narration Length: Each scene's spoken voiceover contains approximately {words_per_scene} words (1-3 short, natural sentences in {target_lang}).
 - Total Spoken Words: The total narration across all {final_scene_count} scenes MUST be approximately {words_target} words so the spoken voiceover matches ~{target_duration}s.
 
-Voice Performance Rules (the narration is performed by an expressive human-like voice actor):
-- Write the narration as ONE continuous performance: each scene must flow naturally from the previous one, following an emotional arc (build tension, release it, contrast quiet and powerful moments).
+Voice Emotion & Dramatic Performance Rules (CRITICAL FOR VOICE ACTING):
+- Voice Acting Delivery: The narration is performed by an expressive AI voice actor. Every scene MUST have an emotional tone that matches its story moment.
+- Follow a Dynamic Emotional Arc across the video:
+  * Opening scene: Intriguing, mysterious or captivating hook (e.g. "mysterious, hushed suspense" or "curious, gentle wonder").
+  * Middle scene(s): Deepening emotion, conflict or intensity (e.g. "heartbreaking, solemn with voice trembling", "urgent, speaking rapidly", "intense, rising tension").
+  * Climax scene: Peak dramatic intensity (e.g. "commanding, fierce battle cry", "triumphant, loud and breathless awe").
+  * Ending scene: Poignant reflection or inspiring resolution (e.g. "reverent, slow emotional resonance", "warm, deeply inspiring").
 - Use natural punctuation for rhythm: commas, "…" for a lingering pause, "—" for a sudden break.
-- You MAY insert performance cues inside the narration, written in English square brackets, ONLY from this list: {', '.join(PERFORMANCE_CUES)}. Use 0-2 cues per scene, only where a real narrator would change delivery. Never put any other words in square brackets.
+- You MAY insert performance cues inside the narration, written in English square brackets, ONLY from this list: {', '.join(PERFORMANCE_CUES)}. Use 0-2 cues per scene, placed where a real narrator would pause or express emotion. Never put any other words in square brackets.
 
 Requirements for each scene:
 1. "narration": Spoken voiceover STRICTLY in {target_lang} (~{words_per_scene} words, cues not counted).
    Format Guidelines: {cfg['narration_guidelines']}
-2. "delivery": 2-6 English words telling the voice actor HOW to speak this scene: emotion, volume and pace (e.g. "hushed, slow, suspenseful", "rising, proud, powerful", "soft, tender, intimate").
+2. "delivery": 2-6 vivid English words specifying the EXACT voice emotion, volume, and pace for this scene (e.g. "whispered urgently", "grief-stricken, voice trembling", "fierce, resolute and booming", "soft, tender, nostalgic"). DO NOT use generic or flat descriptions!
 3. "pause_after": Seconds of silence after this scene: 0.3 for quick flow, 0.6 normally, 1.0-1.5 before a dramatic turn and after the final scene.
 4. "visual_prompt": A unique, distinct visual description written in English for 8K photorealistic image generation (ComfyUI Z-Image-Turbo). Vary camera angles, subjects, macro details, and perspectives between scenes!
    Visual Guidelines: {cfg['visual_guidelines']}
@@ -821,6 +826,40 @@ def _gain(percent: int) -> float:
     return max(0, min(200, int(percent))) / 100
 
 
+def format_srt_time(seconds: float) -> str:
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int(round((seconds - int(seconds)) * 1000))
+    return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
+
+def generate_srt_subtitles(scenes: list[dict], scene_durations: list[float], output_srt: Path) -> Path:
+    """Generates standard UTF-8 SRT subtitles synchronized with scene durations."""
+    lines = []
+    current_time = 0.0
+    sub_idx = 1
+    for sc, dur in zip(scenes, scene_durations):
+        raw_text = sc.get("narration", "")
+        clean_text = re.sub(r"\[[^\]]+\]", "", raw_text)
+        clean_text = re.sub(r"\s+", " ", clean_text).strip()
+        if not clean_text:
+            current_time += dur
+            continue
+
+        start_time = current_time
+        end_time = max(start_time + 0.5, current_time + dur - 0.08)
+
+        lines.append(f"{sub_idx}")
+        lines.append(f"{format_srt_time(start_time)} --> {format_srt_time(end_time)}")
+        lines.append(clean_text)
+        lines.append("")
+        sub_idx += 1
+        current_time += dur
+
+    output_srt.write_text("\n".join(lines), encoding="utf-8")
+    return output_srt
+
+
 def assemble_final_video(
     scene_videos: list[Path],
     scene_audios: list[Path],
@@ -830,12 +869,12 @@ def assemble_final_video(
     music_volume: int = 100,
     voice_volume: int = 100,
     music_ducking: bool = True,
+    enable_subtitles: bool = True,
+    subtitles_file: Path | None = None,
 ) -> Path:
-    """Concatenates scene clips and the voiceover, optionally mixing in a background music bed.
-
-    Voice and music are loudness-normalised first (auto balance); music_volume / voice_volume
-    then adjust each relative to that balance. With ducking on, the music dips further while
-    the narrator speaks.
+    """Concatenates scene clips and the voiceover, optionally mixing in a background music bed
+    with silky smooth fade transitions and dynamic sidechain ducking. Optionally burns synchronized
+    subtitles onto the video.
     """
     job_dir = output_path.parent
     concat_file = job_dir / "concat_list.txt"
@@ -860,24 +899,35 @@ def assemble_final_video(
     )
     use_music = music_file is not None and music_file.exists() and _gain(music_volume) > 0
 
+    # Determine video encoding: burn subtitles if enabled and subtitle file exists
+    use_subs = enable_subtitles and subtitles_file is not None and subtitles_file.exists() and subtitles_file.stat().st_size > 10
+    if use_subs:
+        logger.info(f"Burning subtitles onto video from {subtitles_file.name}...")
+        sub_name = subtitles_file.name
+        vf_sub = f"subtitles={sub_name}:force_style='FontName=Arial,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=3,Outline=2.2,Shadow=1.0,MarginV=35,Alignment=2'"
+        video_args = ["-vf", vf_sub, *video_encoder_args(20), "-pix_fmt", "yuv420p"]
+    else:
+        video_args = ["-c:v", "copy"]
+
     if use_music:
         total_dur = get_audio_duration(full_voice)
-        fade_out = min(3.0, max(0.5, total_dur / 4))
+        fade_out = min(3.5, max(1.0, total_dur / 5))
         fade_out_start = max(0.0, total_dur - fade_out)
         logger.info(
             f"Mixing background music: {music_file.name} (music {music_volume}%, voice {voice_volume}%, ducking {'on' if music_ducking else 'off'})"
         )
-        # [1:a] voice, [2:a] music looped to cover the whole narration
+        # Smooth S-curve / sine fade-in (2.5s) and gentle fade-out at the end
         music_chain = (
             f"[2:a]aresample=48000,loudnorm=I={MUSIC_TARGET_LUFS}:TP=-8:LRA=11,aresample=48000,"
             f"volume={_gain(music_volume):.2f},"
-            f"afade=t=in:st=0:d=1.5,afade=t=out:st={fade_out_start:.2f}:d={fade_out:.2f}[bg];"
+            f"afade=t=in:st=0:d=2.5:curve=esin,afade=t=out:st={fade_out_start:.2f}:d={fade_out:.2f}:curve=esin[bg];"
         )
         if music_ducking:
+            # Professional smooth ducking: attack=45ms (gentle drop), release=700ms (silky recovery), knee=2.8
             filter_complex = (
                 f"[1:a]{voice_chain},asplit=2[voice][sc];"
                 + music_chain
-                + "[bg][sc]sidechaincompress=threshold=0.02:ratio=6:attack=15:release=350[bed];"
+                + "[bg][sc]sidechaincompress=threshold=0.035:ratio=4.5:attack=45:release=700:knee=2.8[bed];"
             )
         else:
             filter_complex = f"[1:a]{voice_chain}[voice];" + music_chain + "[bg]anull[bed];"
@@ -892,7 +942,7 @@ def assemble_final_video(
             "-filter_complex", filter_complex,
             "-map", "0:v",
             "-map", "[aout]",
-            "-c:v", "copy",
+            *video_args,
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
             str(output_path)
@@ -905,11 +955,11 @@ def assemble_final_video(
             "-filter_complex", f"[1:a]{voice_chain},alimiter=limit=0.95[aout]",
             "-map", "0:v",
             "-map", "[aout]",
-            "-c:v", "copy",
+            *video_args,
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
             str(output_path)
         ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    subprocess.run(cmd, check=True, capture_output=True, cwd=str(job_dir))
 
     return output_path

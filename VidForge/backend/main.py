@@ -63,6 +63,7 @@ class CreateJobRequest(BaseModel):
     music_volume: int = Field(100, ge=0, le=200)
     voice_volume: int = Field(100, ge=50, le=150)
     music_ducking: bool = True
+    enable_subtitles: bool = True
 
 class TTSConfigRequest(BaseModel):
     elevenlabs_api_key: str | None = None
@@ -346,7 +347,8 @@ def create_job(req: CreateJobRequest):
         music_track=req.music_track,
         music_volume=req.music_volume,
         voice_volume=req.voice_volume,
-        music_ducking=req.music_ducking
+        music_ducking=req.music_ducking,
+        enable_subtitles=req.enable_subtitles
     )
     return {"id": job_id, "status": "QUEUED"}
 
@@ -427,8 +429,13 @@ def refine_project(job_id: str, req: RefineRequest):
 
 
 @app.get("/api/jobs/{job_id}/download/{kind}")
-def download_project_file(job_id: str, kind: Literal["video", "thumbnail"]):
+def download_project_file(job_id: str, kind: Literal["video", "thumbnail", "subtitles"]):
     job = _project_or_404(job_id)
+    if kind == "subtitles":
+        srt = projects.find_output(job_id, "subtitles", ".srt") or (projects.work_dir(job_id) / "subtitles.srt")
+        if not srt or not srt.exists():
+            raise HTTPException(status_code=404, detail="This project has no subtitles file")
+        return FileResponse(srt, filename=projects.download_name(job["title"], ".srt"), media_type="text/plain; charset=utf-8")
     path = projects.url_to_path(job.get("output_video" if kind == "video" else "thumbnail") or "")
     if not path:
         raise HTTPException(status_code=404, detail=f"This project has no {kind} yet")

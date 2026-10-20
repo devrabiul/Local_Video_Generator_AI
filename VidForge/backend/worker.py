@@ -194,6 +194,17 @@ async def process_job(job: dict):
         update_job_status(job_id, status="COMPOSING", progress=94, current_step=f"Mixing voiceover with background music ({music_file.stem})..." if music_file else "Mixing final voiceover...")
         final_mp4 = projects.new_output_path(job_id, "video", ".mp4")
 
+        # Subtitle processing
+        enable_subtitles = bool(job.get("enable_subtitles", 1))
+        srt_path = work_dir / "subtitles.srt"
+        if enable_subtitles:
+            ai_engine.generate_srt_subtitles(scenes, scene_durations, srt_path)
+            try:
+                out_srt = projects.new_output_path(job_id, "subtitles", ".srt")
+                shutil.copy(srt_path, out_srt)
+            except Exception as e:
+                logger.warning(f"Could not copy sidecar srt: {e}")
+
         await asyncio.to_thread(
             ai_engine.assemble_final_video,
             scene_videos=scene_videos,
@@ -204,6 +215,8 @@ async def process_job(job: dict):
             music_volume=100 if job.get("music_volume") is None else int(job["music_volume"]),
             voice_volume=100 if job.get("voice_volume") is None else int(job["voice_volume"]),
             music_ducking=bool(job.get("music_ducking", 1)),
+            enable_subtitles=enable_subtitles,
+            subtitles_file=srt_path if enable_subtitles else None,
         )
 
         latest = get_job(job_id)

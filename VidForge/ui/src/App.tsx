@@ -6,7 +6,7 @@ import {
   Plus, ArrowRight, BookOpen, Bot, Cpu, AlertTriangle,
   MessageSquare, Send, User, Key, Zap, ExternalLink, Mic, Upload, Settings, X, Sun, Moon,
   Newspaper, Presentation, GraduationCap, Megaphone, Clapperboard, Camera, UserRound, Flame,
-  Plane, Rabbit, Search, Music, FolderOpen, Image as ImageIcon, PartyPopper, Boxes, type LucideIcon
+  Plane, Rabbit, Search, Music, FolderOpen, Image as ImageIcon, PartyPopper, Boxes, Subtitles, type LucideIcon
 } from 'lucide-react';
 import ModelsPage from './ModelsPage';
 import BackgroundMusicPicker, { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type MusicTrack } from './BackgroundMusicPicker';
@@ -372,6 +372,7 @@ export default function App() {
   const [title, setTitle] = useState("");
   const [language, setLanguage] = useState<string>("bn");
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "16:9">("9:16");
+  const [enableSubtitles, setEnableSubtitles] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showInspirations, setShowInspirations] = useState(false);
   const [dismissedFailedJobIds, setDismissedFailedJobIds] = useState<string[]>([]);
@@ -948,6 +949,7 @@ export default function App() {
           target_duration: targetDuration,
           motion_mode: motionMode,
           music_theme: musicTheme,
+          enable_subtitles: enableSubtitles,
           ...musicJobFields()
         })
       });
@@ -1027,6 +1029,7 @@ export default function App() {
           target_duration: targetDuration,
           motion_mode: motionMode,
           music_theme: musicTheme,
+          enable_subtitles: enableSubtitles,
           ...musicJobFields()
         })
       });
@@ -1134,7 +1137,7 @@ export default function App() {
     }
   };
 
-  const downloadUrl = (jobId: string, kind: "video" | "thumbnail") => `${API_BASE}/api/jobs/${jobId}/download/${kind}`;
+  const downloadUrl = (jobId: string, kind: "video" | "thumbnail" | "subtitles") => `${API_BASE}/api/jobs/${jobId}/download/${kind}`;
 
   const RUNNING_STATUSES: Job['status'][] = ['SCRIPTING', 'VOICEOVER', 'GENERATING_IMAGES', 'ANIMATING_VIDEO', 'COMPOSING'];
   const runningJobs = jobs.filter(j => RUNNING_STATUSES.includes(j.status));
@@ -1693,6 +1696,83 @@ export default function App() {
                   value={musicSettings}
                   onChange={setMusicSettings}
                 />
+                
+                {/* Subtitles / Captions Toggle */}
+                <div style={{
+                  background: 'var(--panel)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 12,
+                  padding: '12px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  boxShadow: 'var(--panel-shadow)'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      background: enableSubtitles ? 'rgba(79, 70, 229, 0.15)' : 'var(--line-soft)',
+                      color: enableSubtitles ? 'var(--primary)' : 'var(--t-muted)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      transition: 'all 0.2s ease'
+                    }}>
+                      <Subtitles size={18} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--t-body)', display: 'flex', alignItems: 'center', gap: 7 }}>
+                        <span>Subtitles & Captions (সাবটাইটেল)</span>
+                        <span style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          padding: '2px 7px',
+                          borderRadius: 6,
+                          background: enableSubtitles ? 'rgba(16, 185, 129, 0.15)' : 'var(--line-soft)',
+                          color: enableSubtitles ? 'var(--a-green)' : 'var(--t-muted)'
+                        }}>
+                          {enableSubtitles ? 'ON' : 'OFF'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--t-muted)', marginTop: 2 }}>
+                        {enableSubtitles ? 'Burn synchronized captions onto the video' : 'Render clean video without on-screen captions'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setEnableSubtitles(!enableSubtitles)}
+                    aria-label="Toggle Subtitles"
+                    style={{
+                      position: 'relative',
+                      width: 46,
+                      height: 26,
+                      borderRadius: 26,
+                      background: enableSubtitles ? 'var(--primary)' : 'var(--line)',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: 0,
+                      transition: 'background-color 0.2s ease',
+                      flexShrink: 0
+                    }}
+                  >
+                    <span style={{
+                      position: 'absolute',
+                      top: 3,
+                      left: enableSubtitles ? 23 : 3,
+                      width: 20,
+                      height: 20,
+                      borderRadius: '50%',
+                      background: '#ffffff',
+                      boxShadow: '0 2px 5px rgba(0,0,0,0.25)',
+                      transition: 'left 0.2s ease'
+                    }} />
+                  </button>
+                </div>
 
                 {/* Submit */}
                 <button
@@ -2454,6 +2534,29 @@ export default function App() {
                         {copySuccess ? <Check size={14} color="var(--a-green)" /> : <Copy size={14} />}
                         {copySuccess ? 'Copied Script!' : 'Copy Script'}
                       </button>
+                      
+                      <button
+                        type="button"
+                        onClick={() => setEnableSubtitles(!enableSubtitles)}
+                        style={{
+                          background: enableSubtitles ? 'rgba(79, 70, 229, 0.12)' : 'var(--line-soft)',
+                          border: `1px solid ${enableSubtitles ? 'var(--primary)' : 'var(--line)'}`,
+                          color: enableSubtitles ? 'var(--primary)' : 'var(--t-muted)',
+                          padding: '7px 12px',
+                          borderRadius: 8,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease'
+                        }}
+                        title={enableSubtitles ? "Subtitles will be burned into video" : "No subtitles will be burned"}
+                      >
+                        <Subtitles size={14} />
+                        <span>Subtitles: {enableSubtitles ? 'ON' : 'OFF'}</span>
+                      </button>
 
                       <button
                         type="button"
@@ -2940,6 +3043,11 @@ export default function App() {
                             <button type="button" className="btn btn-ghost" disabled style={{ flex: 1 }}>
                               <Download size={14} /> Thumbnail
                             </button>
+                          )}
+                          {cj.status === 'DONE' && (
+                            <a className="btn btn-ghost" href={downloadUrl(cj.id, "subtitles")} style={{ padding: '0 10px' }} title="Download SRT Subtitles (.srt)">
+                              <Subtitles size={14} />
+                            </a>
                           )}
                         </div>
                         <div className="gallery-actions" style={{ paddingTop: 0, marginTop: 0 }}>

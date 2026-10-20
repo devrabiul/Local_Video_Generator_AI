@@ -195,12 +195,23 @@ def get_all_tts_engines() -> dict:
 CUE_PATTERN = re.compile(r"\[([^\[\]]{1,40})\]")
 
 GEMINI_TAGS = {
-    "whispers": "<whispers>", "sighs": "<sigh>", "laughs": "<laugh>", "gasps": "<gasp>",
+    "whispers": "<whispers>", "whispering": "<whispering>", "softly": "<whispers>",
+    "sighs": "<sigh>", "sigh": "<sigh>",
+    "laughs": "<laugh>", "laugh": "<laugh>", "laughing": "<laughter>", "laughter": "<laughter>",
+    "chuckle": "<chuckle>", "chuckles": "<chuckles>",
+    "gasps": "<gasp>", "gasp": "<gasp>",
+    "breath": "<breath>", "heavy breath": "<heavy breath>", "phew": "<phew>",
+    "cry": "<cry>", "sob": "<sob>", "groan": "<groan>", "shout": "<shout>",
+    "cheer": "<cheer>", "excited": "<cheer>", "sad": "<sigh>",
     "short pause": "<short pause>", "long pause": "<long pause>",
 }
 ELEVENLABS_TAGS = {
-    "whispers": "[whispering]", "softly": "[softly]", "excited": "[excited]", "sad": "[sad]",
-    "sighs": "[sigh]", "laughs": "[laughing]", "gasps": "[gasp]",
+    "whispers": "[whispering]", "whispering": "[whispering]", "softly": "[softly]",
+    "excited": "[excited]", "sad": "[sad]",
+    "sighs": "[sigh]", "sigh": "[sigh]",
+    "laughs": "[laughing]", "laugh": "[laughing]", "chuckle": "[chuckles]", "chuckles": "[chuckles]",
+    "gasps": "[gasp]", "gasp": "[gasp]",
+    "shout": "[shouting]", "breath": "[breath]", "groan": "[groans]",
     "short pause": "…", "long pause": "… …",
 }
 PLAIN_PAUSES = {"short pause": ",", "long pause": "…"}
@@ -581,7 +592,12 @@ async def generate_voiceover(
     logger.info(f"Generating voiceover: engine='{engine}', voice='{name}', delivery='{delivery}'")
 
     if engine == "gemini":
-        style = "; ".join(part for part in (narrator_style, delivery) if part)
+        parts = []
+        if delivery:
+            parts.append(delivery)
+        if narrator_style and narrator_style not in delivery:
+            parts.append(narrator_style)
+        style = "; ".join(parts)[:120]
         return await generate_gemini_voiceover(text, name, output_path, style=style, on_status=on_status)
     if engine == "elevenlabs":
         return await generate_elevenlabs_voiceover(

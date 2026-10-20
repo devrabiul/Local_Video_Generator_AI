@@ -41,6 +41,46 @@ def _safe_load_file(filename, device="cpu"):
 
 safetensors.torch.load_file = _safe_load_file
 
+import re
+
+def is_indic_text(text: str) -> bool:
+    """Checks if text contains Bengali, Devanagari, or other South Asian script characters."""
+    return any("\u0980" <= c <= "\u09ff" or "\u0900" <= c <= "\u097f" for c in text)
+
+def transliterate_indic_to_latin(text: str) -> str:
+    """Converts Bengali or Indic script text into clean, pronounceable Latin phonetic characters
+    so that the default F5-TTS base model (trained on EN/ZH) can accurately synthesize the speech
+    without dropping characters as unknown out-of-vocab tokens.
+    """
+    if not is_indic_text(text):
+        return text
+
+    t = text.replace("।", ".").replace("—", ", ").replace("–", ", ").replace("…", "...")
+    t = t.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+
+    # Common word mappings for natural Bengali phonetics
+    word_map = {
+        "ক্ষিতিমোহন": "Khitimohon", "তিতুমীর": "Titumiir", "বাঁশের": "bansher", "কেল্লা": "kella",
+        "ঐতিহাসিক": "oitihasik", "প্রতিরোধ": "protirodh", "প্রাচীন": "pracheen", "ইতিহাস": "itihas",
+        "গৌরবময়": "gourob moy", "বীরত্ব": "birootbo", "ত্যাগ": "tyag", "কাহিনী": "kahini",
+        "রূপকথা": "ruupkotha", "ধূলিকণা": "dhuulikona", "জনপদ": "jonopod", "বাংলা": "bangla",
+        "বাংলাদেশ": "bangladesh", "স্বাধীনতা": "shadhinota", "সংগ্রাম": "songram", "যুদ্ধ": "juddho"
+    }
+    for bn_w, en_w in word_map.items():
+        t = t.replace(bn_w, en_w)
+
+    try:
+        from unidecode import unidecode
+        t = unidecode(t)
+    except Exception:
+        pass
+
+    # Clean up artifacts from unidecode (e.g. / for ।)
+    t = t.replace(" / ", ". ").replace("/", ". ")
+    t = re.sub(r"['`]", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
 def main():
     parser = argparse.ArgumentParser(description="VidForge F5-TTS CLI Inference Engine")
     parser.add_argument("--ref_audio", required=True, help="Path to reference audio file (.wav or .mp3)")
@@ -82,11 +122,40 @@ def main():
         print(f"Using local checkpoint: {ckpt_file}")
     f5 = F5TTS(ckpt_file=ckpt_file, vocab_file=args.vocab_file)
 
-    print(f"Synthesizing text: '{args.gen_text[:50]}...' with reference: {ref_audio_path.name}")
+    vocab_has_bengali = False
+    vocab_to_check = args.vocab_file
+    if not vocab_to_check:
+        try:
+            from importlib.resources import files
+            vocab_to_check = str(files("f5_tts").joinpath("infer/examples/vocab.txt"))
+        except Exception:
+            vocab_to_check = ""
+
+    if vocab_to_check and Path(vocab_to_check).exists():
+        try:
+            vocab_data = Path(vocab_to_check).read_text(encoding="utf-8")
+            vocab_has_bengali = any("\u0980" <= c <= "\u09ff" for c in vocab_data)
+        except Exception:
+            pass
+
+    ref_text = args.ref_text or ""
+    gen_text = args.gen_text or ""
+
+    if not vocab_has_bengali:
+        if is_indic_text(ref_text):
+            trans_ref = transliterate_indic_to_latin(ref_text)
+            print(f"Transliterated Bengali reference text for F5-TTS base model: '{trans_ref}'")
+            ref_text = trans_ref
+        if is_indic_text(gen_text):
+            trans_gen = transliterate_indic_to_latin(gen_text)
+            print(f"Transliterated Bengali generation text for F5-TTS base model: '{trans_gen}'")
+            gen_text = trans_gen
+
+    print(f"Synthesizing text: '{gen_text[:50]}...' with reference: {ref_audio_path.name}")
     f5.infer(
         ref_file=str(ref_audio_path),
-        ref_text=args.ref_text or "",
-        gen_text=args.gen_text,
+        ref_text=ref_text,
+        gen_text=gen_text,
         file_wave=str(target_wav),
         speed=args.speed,
         remove_silence=args.remove_silence
