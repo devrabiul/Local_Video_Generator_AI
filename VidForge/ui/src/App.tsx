@@ -694,15 +694,19 @@ export default function App() {
       <header className="studio-header">
         {/* Brand Left (Compact Single Row) */}
         <div className="studio-brand">
-          <div className="brand-logo-badge">
-            <Film size={17} color="#ffffff" />
-            <div style={{ position: 'absolute', bottom: -2, right: -2, width: 10, height: 10, borderRadius: '50%', background: '#10b981', border: '1.5px solid #0b101e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Sparkles size={6} color="#000" />
+          <a href="/" title="Go to home page" aria-label="VidForge AI Studio home" style={{ display: 'flex' }}>
+            <div className="brand-logo-badge">
+              <Film size={17} color="#ffffff" />
+              <div style={{ position: 'absolute', bottom: -2, right: -2, width: 10, height: 10, borderRadius: '50%', background: '#10b981', border: '1.5px solid #0b101e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Sparkles size={6} color="#000" />
+              </div>
             </div>
-          </div>
+          </a>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <h1 className="brand-title">
-              VidForge <span style={{ fontSize: 11, letterSpacing: '0.12em', color: '#38bdf8', fontWeight: 800 }}>AI STUDIO</span>
+              <a href="/" title="Go to home page" style={{ color: 'inherit', textDecoration: 'none' }}>
+                VidForge <span style={{ fontSize: 11, letterSpacing: '0.12em', color: '#38bdf8', fontWeight: 800 }}>AI STUDIO</span>
+              </a>
             </h1>
             <span className="brand-badge">PRO v2.5</span>
           </div>
