@@ -6,12 +6,13 @@ import subprocess
 from pathlib import Path
 import edge_tts
 
-BASE_DIR = Path("D:/AI/VidForge")
+BASE_DIR = Path(__file__).resolve().parent.parent
 SLIDES_DIR = BASE_DIR / "presentation_slides"
 OUTPUT_DIR = BASE_DIR / "output"
 MUSIC_FILE = BASE_DIR / "music" / "cinematic_epic.mp3"
 TEMP_DIR = BASE_DIR / "presentation_temp"
-ARTIFACT_DIR = Path(r"C:\Users\tony\.gemini\antigravity-ide\brain\d71fd3e8-27a5-40de-851b-1f717c115384")
+# Optional extra copy destination for the finished demo video
+ARTIFACT_DIR = Path(os.environ["VIDFORGE_ARTIFACT_DIR"]) if os.environ.get("VIDFORGE_ARTIFACT_DIR") else None
 
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -197,7 +198,7 @@ def assemble_final_presentation():
     print(f"Final presentation video created: {final_output}")
 
     # Copy to artifacts directory so it can be viewed directly
-    if ARTIFACT_DIR.exists():
+    if ARTIFACT_DIR and ARTIFACT_DIR.exists():
         dest_artifact = ARTIFACT_DIR / "vidforge_presentation_demo.mp4"
         shutil.copy(final_output, dest_artifact)
         print(f"Copied to artifact directory: {dest_artifact}")

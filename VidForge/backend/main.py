@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -112,7 +113,10 @@ async def get_system_status():
         "ollama_online": ollama_ok,
         "models": ollama_models,
         "default_model": default_model,
-        "comfyui_online": comfyui_ok
+        "comfyui_online": comfyui_ok,
+        "platform": sys.platform,
+        "wan_available": ai_engine.WAN_SUPPORTED,
+        "video_encoder": await asyncio.to_thread(ai_engine.get_video_encoder)
     }
 
 @app.get("/api/tts/engines")

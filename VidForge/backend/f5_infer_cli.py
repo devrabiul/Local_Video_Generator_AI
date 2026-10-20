@@ -91,7 +91,8 @@ def main():
     if is_mp3 and target_wav.exists():
         import subprocess
         # Convert wav to high quality mp3
-        cmd = ["ffmpeg", "-y", "-i", str(target_wav), "-b:a", "192k", str(out_path)]
+        ffmpeg = os.environ.get("VIDFORGE_FFMPEG", "ffmpeg")
+        cmd = [ffmpeg, "-y", "-i", str(target_wav), "-b:a", "192k", str(out_path)]
         subprocess.run(cmd, capture_output=True, check=True)
         try:
             target_wav.unlink(missing_ok=True)

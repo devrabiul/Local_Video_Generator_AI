@@ -12,6 +12,19 @@ Powered by:
 
 ---
 
+## 💻 Platform Support
+
+| Platform | Status | Notes |
+| :--- | :--- | :--- |
+| **Windows 10/11 + NVIDIA RTX** | ✅ Full | ComfyUI portable, NVENC encoding, Wan 2.1 motion. Launch with `run_studio.bat`. |
+| **Linux + NVIDIA RTX** | ✅ Full | Manual ComfyUI install, NVENC encoding, Wan 2.1 motion. Launch with `VidForge/run_vidforge.sh`. |
+| **macOS (Apple Silicon)** | ⚠️ Partial | Everything except Wan 2.1 AI motion (FP8 weights are not supported on Apple GPUs). Ken Burns motion is used instead and video is encoded with VideoToolbox. 32 GB+ unified memory recommended. |
+| **Any OS without NVIDIA** | ⚠️ Partial | Falls back to CPU encoding (`libx264`); image generation is slow. |
+
+The video encoder is detected automatically on first use (`h264_nvenc` → `h264_videotoolbox` → `libx264`). The workspace can live in any folder; paths are resolved relative to the repository.
+
+---
+
 ## 📂 Repository Structure
 
 ```text
@@ -28,7 +41,8 @@ D:\AI\
 │   │   └── dist/                    # Compiled production build
 │   ├── music/                       # Cinematic royalty-free soundtrack themes
 │   ├── workflows/                   # ComfyUI API JSON workflows (Wan 2.1 & Z-Image-Turbo)
-│   ├── run_vidforge.bat             # One-click studio launcher
+│   ├── run_vidforge.bat             # One-click studio launcher (Windows)
+│   ├── run_vidforge.sh              # One-click studio launcher (macOS / Linux)
 │   └── plan.md                      # Architecture blueprint & development roadmap
 ├── ComfyUI_windows_portable/        # Portable ComfyUI Engine with embedded Python 3.13
 │   ├── ComfyUI/
@@ -52,6 +66,7 @@ This table lists every AI model used across VidForge, its purpose, exact file na
 | **Wan 2.1 I2V 14B (FP8)**<br>*(Cinematic Image-to-Video)* | `wan2.1_i2v_720p_14B_fp8_e4m3fn.safetensors` | `ComfyUI/models/diffusion_models/` | [HuggingFace (Wan-AI / Kijai)](https://huggingface.co/Kijai/WanVideo_comfy/tree/main) |
 | **Z-Image Turbo (BF16)**<br>*(Fast Image Generation)* | `z_image_turbo_bf16.safetensors` | `ComfyUI/models/diffusion_models/` | [HuggingFace](https://huggingface.co/) |
 | **Z-Image Turbo (INT8)** | `z_image_turbo_int8_convrot.safetensors` | `ComfyUI/models/diffusion_models/` | [HuggingFace](https://huggingface.co/) |
+| **Z-Image Qwen3-4B Text Encoder** | `qwen_3_4b_fp8_mixed.safetensors` | `ComfyUI/models/text_encoders/` | [HuggingFace (Comfy-Org)](https://huggingface.co/Comfy-Org/z_image_turbo/tree/main/split_files/text_encoders) |
 | **Wan 2.1 UMT5 Text Encoder** | `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | `ComfyUI/models/text_encoders/` | [HuggingFace (Comfy-Org)](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/tree/main/split_files/text_encoders) |
 | **CLIP Vision Model** | `clip_vision_h.safetensors` | `ComfyUI/models/clip_vision/` | [HuggingFace (ComfyUI)](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/tree/main/split_files/clip_vision) |
 | **Wan 2.1 VAE** | `wan_2.1_vae.safetensors` | `ComfyUI/models/vae/` | [HuggingFace (Wan-AI)](https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-720P) |
@@ -113,7 +128,7 @@ cd D:\AI
    ollama run qwen2.5:14b
    ollama run qwen3.5:9b
    ```
-3. Create the custom VidForge story writer persona:
+3. Create the custom VidForge story writer persona (built on `qwen2.5:14b`):
    ```bash
    cd D:\AI
    ollama create story-writer -f Modelfile
@@ -162,9 +177,41 @@ D:\AI\VidForge\run_vidforge.bat
 ```
 The script will automatically:
 1. Verify Ollama & ComfyUI services.
-2. Initialize Python virtual environment (`uv run`).
-3. Launch the FastAPI backend on `http://127.0.0.1:8700`.
-4. Open the VidForge AI Studio in your default browser.
+2. Build the web UI on first run (`npm ci && npm run build`, requires Node.js 20.19+).
+3. Initialize Python virtual environment (`uv run`).
+4. Launch the FastAPI backend on `http://127.0.0.1:8700`.
+5. Open the VidForge AI Studio in your default browser.
+
+---
+
+## 🐧 Setting Up on Linux or macOS
+
+Requirements: [Ollama](https://ollama.com/download), [uv](https://docs.astral.sh/uv/), Node.js 20.19+, FFmpeg (`brew install ffmpeg` / `sudo apt install ffmpeg`), Git.
+
+1. Clone the repository into any folder (referred to as `<workspace>`).
+2. Install Ollama models and create the persona: `ollama pull qwen2.5:14b && ollama create story-writer -f Modelfile`.
+3. Install ComfyUI into `<workspace>/ComfyUI` (or set `VIDFORGE_COMFYUI_DIR`):
+   ```bash
+   git clone https://github.com/comfyanonymous/ComfyUI.git ComfyUI
+   cd ComfyUI && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+   .venv/bin/pip install f5-tts soundfile
+   ```
+   On Linux install the CUDA build of PyTorch first; on macOS the default PyTorch build uses the Apple GPU (MPS).
+4. Place the models as described in the inventory above (Wan 2.1 models can be skipped on macOS).
+5. Launch: `./VidForge/run_vidforge.sh`
+
+### Configuration
+Copy `VidForge/backend/config.example.json` to `VidForge/backend/config.json` and fill in only what differs from the defaults. Environment variables override the file:
+
+| Setting | Environment variable | Default |
+| :--- | :--- | :--- |
+| `comfyui_dir` | `VIDFORGE_COMFYUI_DIR` | `<workspace>/ComfyUI_windows_portable/ComfyUI` (Windows), `<workspace>/ComfyUI` (macOS/Linux) |
+| `f5_python` | `VIDFORGE_F5_PYTHON` | ComfyUI's embedded Python or its `.venv`/`venv` |
+| `ffmpeg_path` / `ffprobe_path` | `VIDFORGE_FFMPEG` / `VIDFORGE_FFPROBE` | `ffmpeg` / `ffprobe` on `PATH` |
+| `video_encoder` | `VIDFORGE_VIDEO_ENCODER` | `auto` |
+| `ollama_url` / `comfyui_url` | `VIDFORGE_OLLAMA_URL` / `VIDFORGE_COMFYUI_URL` | `http://127.0.0.1:11434` / `http://127.0.0.1:8188` |
+
+Restart the backend after changing the configuration.
 
 ---
 

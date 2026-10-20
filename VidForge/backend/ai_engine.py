@@ -4,6 +4,7 @@ import os
 import random
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 import httpx
@@ -11,10 +12,95 @@ from loguru import logger
 import edge_tts
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-OLLAMA_URL = "http://127.0.0.1:11434"
-COMFYUI_URL = "http://127.0.0.1:8188"
-COMFYUI_INPUT = Path("D:/AI/ComfyUI_windows_portable/ComfyUI/input")
-COMFYUI_OUTPUT = Path("D:/AI/ComfyUI_windows_portable/ComfyUI/output")
+AI_ROOT = BASE_DIR.parent
+IS_WINDOWS = sys.platform == "win32"
+IS_MACOS = sys.platform == "darwin"
+
+CONFIG_FILE = BASE_DIR / "backend" / "config.json"
+if not CONFIG_FILE.exists():
+    CONFIG_FILE = BASE_DIR / "config.json"
+
+def _load_config() -> dict:
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def _setting(key: str, env_var: str, default: str) -> str:
+    """Environment variable wins, then config.json, then the per-OS default."""
+    return os.environ.get(env_var) or _load_config().get(key) or default
+
+def _default_comfyui_dir() -> Path:
+    if IS_WINDOWS:
+        return AI_ROOT / "ComfyUI_windows_portable" / "ComfyUI"
+    return AI_ROOT / "ComfyUI"
+
+def _default_f5_python(comfy_dir: Path) -> Path:
+    """F5-TTS runs in ComfyUI's Python environment, where torch is already installed."""
+    candidates = [
+        comfy_dir.parent / "python_embeded" / "python.exe",  # Windows portable build
+        comfy_dir / ".venv" / "Scripts" / "python.exe",
+        comfy_dir / "venv" / "Scripts" / "python.exe",
+        comfy_dir / ".venv" / "bin" / "python",
+        comfy_dir / "venv" / "bin" / "python",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return Path(sys.executable)
+
+OLLAMA_URL = _setting("ollama_url", "VIDFORGE_OLLAMA_URL", "http://127.0.0.1:11434")
+COMFYUI_URL = _setting("comfyui_url", "VIDFORGE_COMFYUI_URL", "http://127.0.0.1:8188")
+COMFYUI_DIR = Path(_setting("comfyui_dir", "VIDFORGE_COMFYUI_DIR", str(_default_comfyui_dir())))
+COMFYUI_INPUT = COMFYUI_DIR / "input"
+COMFYUI_OUTPUT = COMFYUI_DIR / "output"
+FFMPEG = _setting("ffmpeg_path", "VIDFORGE_FFMPEG", "ffmpeg")
+FFPROBE = _setting("ffprobe_path", "VIDFORGE_FFPROBE", "ffprobe")
+VIDEO_ENCODER_SETTING = _setting("video_encoder", "VIDFORGE_VIDEO_ENCODER", "auto")
+
+# Wan 2.1 14B ships as FP8 weights, which Apple's MPS backend cannot run
+WAN_SUPPORTED = not IS_MACOS
+
+_video_encoder: str | None = None
+
+def _encoder_works(name: str) -> bool:
+    # Builds can list nvenc without an NVIDIA GPU present, so test with a tiny real encode
+    cmd = [
+        FFMPEG, "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.2",
+        "-c:v", name, "-pix_fmt", "yuv420p", "-f", "null", "-"
+    ]
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=30).returncode == 0
+    except Exception:
+        return False
+
+def get_video_encoder() -> str:
+    """Picks the H.264 encoder once: NVENC (NVIDIA), VideoToolbox (macOS), else libx264 on the CPU."""
+    global _video_encoder
+    if _video_encoder:
+        return _video_encoder
+    if VIDEO_ENCODER_SETTING != "auto":
+        _video_encoder = VIDEO_ENCODER_SETTING
+    else:
+        preferred = ["h264_videotoolbox"] if IS_MACOS else ["h264_nvenc"]
+        _video_encoder = next((enc for enc in preferred if _encoder_works(enc)), "libx264")
+    logger.info(f"Using video encoder: {_video_encoder}")
+    return _video_encoder
+
+def video_encoder_args(quality: int) -> list[str]:
+    """Encoder flags at a comparable quality level (lower = better, CRF-style)."""
+    enc = get_video_encoder()
+    if enc == "h264_nvenc":
+        return ["-c:v", enc, "-preset", "p5", "-cq", str(quality)]
+    if enc == "h264_videotoolbox":
+        return ["-c:v", enc, "-b:v", "12M"]
+    if enc == "libx264":
+        return ["-c:v", enc, "-preset", "medium", "-crf", str(quality)]
+    return ["-c:v", enc]
+
 WORKFLOWS_DIR = BASE_DIR / "workflows"
 MUSIC_DIR = BASE_DIR / "music"
 
@@ -44,16 +130,6 @@ VOICES = {
         "en-GB-SoniaNeural": "Sonia (UK Female - Sophisticated British Narration)",
         "en-IN-PrabhatNeural": "Prabhat (Indian English Male - Clear & Articulate)",
         "en-IN-NeerjaExpressiveNeural": "Neerja (Indian English Female - Expressive & Vivid)"
-    },
-    "ur": {
-        "ur-PK-AsadNeural": "Asad (پاکستانی گہرا مردانہ بیان - Epic Male)",
-        "ur-PK-UzmaNeural": "Uzma (پاکستانی جذباتی زنانہ آواز - Expressive Female)",
-        "ur-IN-SalmanNeural": "Salman (بھارتی کلاسیک مردانہ آواز - Indian Urdu Male)",
-        "ur-IN-GulNeural": "Gul (بھارتی نرم زنانہ آواز - Warm Indian Urdu Female)"
-    },
-    "ar": {
-        "ar-SA-HamedNeural": "Hamed (عربي سعودي عميق - Epic Historical Male)",
-        "ar-SA-ZariyahNeural": "Zariyah (عربي سعودي واضح - Clear Arabic Female)"
     }
 }
 
@@ -126,22 +202,11 @@ F5_PRESET_VOICES = {
 SAMPLE_PHRASES = {
     "bn": "স্বাগতম VidForge এ। আমি আপনার ঐতিহাসিক কাহিনীর কণ্ঠস্বর।",
     "hi": "VidForge में आपका स्वागत है। मैं आपकी कहानी का स्वर हूँ।",
-    "en": "Welcome to VidForge AI Studio. I am your cinematic narrator.",
-    "ur": "VidForge میں خوش آمدید۔ میں آپ کی کہانی کی آواز ہوں۔",
-    "ar": "مرحباً بكم في استوديو VidForge للذكاء الاصطناعي."
+    "en": "Welcome to VidForge AI Studio. I am your cinematic narrator."
 }
 
-CONFIG_FILE = BASE_DIR / "backend" / "config.json"
-if not CONFIG_FILE.exists():
-    CONFIG_FILE = BASE_DIR / "config.json"
-
 def get_tts_config() -> dict:
-    if CONFIG_FILE.exists():
-        try:
-            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {"elevenlabs_api_key": "", "default_engine": "edge"}
+    return _load_config() or {"elevenlabs_api_key": "", "default_engine": "edge"}
 
 def save_tts_config(data: dict) -> dict:
     cfg = get_tts_config()
@@ -168,12 +233,12 @@ def get_all_tts_engines() -> dict:
         "f5tts": {
             "name": "F5-TTS (Local Zero-Shot Voice Cloning)",
             "description": "Local AI voice cloning running on your RTX 5070 Ti GPU",
-            "ready": True,
+            "ready": F5_PYTHON.exists(),
             "voices": F5_PRESET_VOICES
         }
     }
 
-PYTHON_EMBEDDED = Path("D:/AI/ComfyUI_windows_portable/python_embeded/python.exe")
+F5_PYTHON = Path(_setting("f5_python", "VIDFORGE_F5_PYTHON", str(_default_f5_python(COMFYUI_DIR))))
 F5_CLI_SCRIPT = BASE_DIR / "backend" / "f5_infer_cli.py"
 REF_VOICES_DIR = BASE_DIR / "backend" / "ref_voices"
 
@@ -235,7 +300,7 @@ async def generate_f5_voiceover(text: str, ref_key: str, output_path: Path, ref_
         ref_txt = "Some call me nature, others call me mother nature."
 
     cmd = [
-        str(PYTHON_EMBEDDED),
+        str(F5_PYTHON),
         str(F5_CLI_SCRIPT),
         "--ref_audio", str(ref_file),
         "--ref_text", ref_txt,
@@ -247,6 +312,7 @@ async def generate_f5_voiceover(text: str, ref_key: str, output_path: Path, ref_
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    env["VIDFORGE_FFMPEG"] = FFMPEG
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -401,9 +467,7 @@ async def generate_story_script(
     lang_names = {
         "bn": "Bengali (বাংলা)",
         "hi": "Hindi (हिन्दी)",
-        "en": "English",
-        "ur": "Urdu (اردو)",
-        "ar": "Arabic (العربية)"
+        "en": "English"
     }
     target_lang = lang_names.get(language, "Bengali (বাংলা)")
     cfg = VIDEO_TYPES_CONFIG.get(video_type, VIDEO_TYPES_CONFIG["story"])
@@ -569,7 +633,7 @@ async def generate_voiceover(
 
 def get_audio_duration(audio_path: Path) -> float:
     cmd = [
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        FFPROBE, "-v", "error", "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -810,12 +874,12 @@ def extend_video_to_duration(raw_video: Path, target_duration: float, aspect: st
     )
 
     cmd = [
-        "ffmpeg", "-y",
+        FFMPEG, "-y",
         "-i", str(raw_video),
         "-filter_complex", filter_str,
         "-map", "[vloop]",
         "-t", f"{target_duration:.2f}",
-        "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "20", "-pix_fmt", "yuv420p",
+        *video_encoder_args(20), "-pix_fmt", "yuv420p",
         str(final_video)
     ]
     subprocess.run(cmd, check=True, capture_output=True)
@@ -858,10 +922,10 @@ def create_fallback_motion_clip(image_path: Path, duration: float, aspect: str, 
     vf += f",fade=t=in:st=0:d={fade_d:.2f},fade=t=out:st={fade_out_st:.2f}:d={fade_d:.2f}"
 
     cmd = [
-        "ffmpeg", "-y", "-loop", "1", "-i", str(image_path),
+        FFMPEG, "-y", "-loop", "1", "-i", str(image_path),
         "-vf", vf,
         "-t", f"{duration:.2f}",
-        "-c:v", "h264_nvenc", "-preset", "p5", "-cq", "18", "-pix_fmt", "yuv420p",
+        *video_encoder_args(18), "-pix_fmt", "yuv420p",
         str(output_path)
     ]
     subprocess.run(cmd, check=True, capture_output=True)
@@ -872,18 +936,21 @@ async def animate_scene(image_path: Path, motion_prompt: str, duration: float, a
     mtypes = ["zoom_in", "pan_right", "zoom_out", "tilt_up", "pan_left"]
     chosen_motion = mtypes[fallback_idx % len(mtypes)] if motion_mode != "static" else "static_subtle"
 
-    if motion_mode == "wan":
+    if motion_mode == "wan" and not WAN_SUPPORTED:
+        logger.info(f"Wan 2.1 is not supported on {sys.platform}; using Ken Burns ({chosen_motion})")
+    elif motion_mode == "wan":
         raw_wan = output_path.parent / f"raw_wan_{output_path.stem}.mp4"
         success = await animate_scene_wan(image_path, motion_prompt, aspect, raw_wan)
         if success and raw_wan.exists() and raw_wan.stat().st_size > 1000:
             logger.info(f"Applying seamless ping-pong loop to Wan 2.1 clip for duration {duration:.2f}s...")
-            extend_video_to_duration(raw_wan, duration, aspect, output_path)
+            await asyncio.to_thread(extend_video_to_duration, raw_wan, duration, aspect, output_path)
             return output_path
         logger.info(f"Wan 2.1 unavailable or timed out; falling back to Ken Burns ({chosen_motion})")
 
     # Ultra HD Ken Burns camera motion (recommended, 100% distortion-free)
+    # FFmpeg runs in a thread so the API stays responsive while it renders
     logger.info(f"Rendering Ken Burns motion ({chosen_motion}) with smooth fade transitions for {output_path.name}")
-    create_fallback_motion_clip(image_path, duration, aspect, output_path, motion_type=chosen_motion)
+    await asyncio.to_thread(create_fallback_motion_clip, image_path, duration, aspect, output_path, motion_type=chosen_motion)
     return output_path
 
 def assemble_final_video(scene_videos: list[Path], scene_audios: list[Path], output_path: Path, aspect: str, music_theme: str = "cinematic_epic") -> Path:
@@ -902,8 +969,8 @@ def assemble_final_video(scene_videos: list[Path], scene_audios: list[Path], out
     full_video = job_dir / "combined_video.mp4"
     full_voice = job_dir / "combined_voice.wav"
 
-    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", str(full_video)], check=True, capture_output=True)
-    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(audio_concat), "-c:a", "pcm_s16le", str(full_voice)], check=True, capture_output=True)
+    subprocess.run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", str(full_video)], check=True, capture_output=True)
+    subprocess.run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", str(audio_concat), "-c:a", "pcm_s16le", str(full_voice)], check=True, capture_output=True)
 
     # Check for background music track
     music_file = MUSIC_DIR / f"{music_theme}.mp3"
@@ -931,7 +998,7 @@ def assemble_final_video(scene_videos: list[Path], scene_audios: list[Path], out
         )
 
         cmd = [
-            "ffmpeg", "-y",
+            FFMPEG, "-y",
             "-i", str(full_video),
             "-i", str(full_voice),
             "-stream_loop", "-1", "-i", str(music_file),
@@ -947,7 +1014,7 @@ def assemble_final_video(scene_videos: list[Path], scene_audios: list[Path], out
     else:
         # Fallback without music bed
         cmd = [
-            "ffmpeg", "-y",
+            FFMPEG, "-y",
             "-i", str(full_video),
             "-i", str(full_voice),
             "-c:v", "copy",

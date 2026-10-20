@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from playwright.async_api import async_playwright
 
-SLIDES_DIR = Path("D:/AI/VidForge/presentation_slides")
+SLIDES_DIR = Path(__file__).resolve().parent.parent / "presentation_slides"
 SLIDES_DIR.mkdir(parents=True, exist_ok=True)
 
 async def capture_all_slides():

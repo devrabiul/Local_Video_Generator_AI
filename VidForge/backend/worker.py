@@ -60,7 +60,7 @@ async def process_job(job: dict):
         for i, sc in enumerate(scenes):
             audio_path = work_dir / f"scene_{i+1}.mp3"
             await ai_engine.generate_voiceover(sc["narration"], job["voice"], audio_path)
-            duration = ai_engine.get_audio_duration(audio_path)
+            duration = await asyncio.to_thread(ai_engine.get_audio_duration, audio_path)
             sc["duration"] = duration
             scene_audios.append(audio_path)
             scene_durations.append(duration)
@@ -102,7 +102,8 @@ async def process_job(job: dict):
         final_mp4 = OUTPUT_DIR / f"{job_id}.mp4"
         thumbnail = OUTPUT_DIR / f"{job_id}_thumb.png"
 
-        ai_engine.assemble_final_video(
+        await asyncio.to_thread(
+            ai_engine.assemble_final_video,
             scene_videos=scene_videos,
             scene_audios=scene_audios,
             output_path=final_mp4,

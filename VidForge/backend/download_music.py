@@ -2,7 +2,7 @@ import urllib.request
 from pathlib import Path
 import subprocess
 
-MUSIC_DIR = Path("D:/AI/VidForge/music")
+MUSIC_DIR = Path(__file__).resolve().parent.parent / "music"
 MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 
 TRACKS = {

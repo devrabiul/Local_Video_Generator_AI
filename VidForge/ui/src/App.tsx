@@ -42,6 +42,9 @@ interface SystemStatus {
   models: string[];
   default_model: string;
   comfyui_online: boolean;
+  platform?: string;
+  wan_available?: boolean;
+  video_encoder?: string;
 }
 
 const API_BASE = typeof window !== 'undefined' && window.location.port === "8700" ? "" : "http://127.0.0.1:8700";
@@ -441,13 +444,17 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Wan 2.1 cannot run on every platform (e.g. macOS); fall back to Ken Burns there
+  const wanAvailable = systemStatus.wan_available !== false;
+  useEffect(() => {
+    if (!wanAvailable && motionMode === 'wan') setMotionMode('kenburns');
+  }, [wanAvailable, motionMode]);
+
   // Update default voice when language changes (for Edge-TTS)
   useEffect(() => {
     if (language === "bn") setVoice("bn-BD-PradeepNeural");
     else if (language === "hi") setVoice("hi-IN-MadhurNeural");
     else if (language === "en") setVoice("en-US-ChristopherNeural");
-    else if (language === "ur") setVoice("ur-PK-AsadNeural");
-    else if (language === "ar") setVoice("ar-SA-HamedNeural");
   }, [language]);
 
   // Audio Voice Preview Player
@@ -1023,13 +1030,15 @@ export default function App() {
                   </div>
 
                   <div
-                    onClick={() => setMotionMode('wan')}
+                    onClick={() => wanAvailable && setMotionMode('wan')}
+                    title={wanAvailable ? undefined : `Wan 2.1 is not supported on this platform (${systemStatus.platform})`}
                     style={{
                       padding: '8px 10px',
                       borderRadius: 10,
                       background: motionMode === 'wan' ? 'rgba(59, 130, 246, 0.18)' : 'rgba(13, 18, 32, 0.65)',
                       border: motionMode === 'wan' ? '2px solid #3b82f6' : '1px solid rgba(255,255,255,0.08)',
-                      cursor: 'pointer',
+                      cursor: wanAvailable ? 'pointer' : 'not-allowed',
+                      opacity: wanAvailable ? 1 : 0.45,
                       transition: 'all 0.2s ease'
                     }}
                   >
@@ -1039,7 +1048,9 @@ export default function App() {
                       <span style={{ fontSize: 9, background: 'rgba(234, 179, 8, 0.2)', color: '#facc15', padding: '1px 4px', borderRadius: 4, fontWeight: 700 }}>পরীক্ষামূলক</span>
                     </div>
                     <div style={{ fontSize: 9.5, color: '#94a3b8', lineHeight: 1.3 }}>
-                      ComfyUI I2V নিউরাল ভিডিও এনিমেশন। ক্যারেক্টার নড়াচড়া তৈরি করে।
+                      {wanAvailable
+                        ? 'ComfyUI I2V নিউরাল ভিডিও এনিমেশন। ক্যারেক্টার নড়াচড়া তৈরি করে।'
+                        : 'এই প্ল্যাটফর্মে সমর্থিত নয় (Not supported on this platform)।'}
                     </div>
                   </div>
                 </div>
@@ -1137,9 +1148,7 @@ export default function App() {
                     {[
                       { id: 'bn', label: '🇧🇩 বাংলা' },
                       { id: 'hi', label: '🇮🇳 हिन्दी' },
-                      { id: 'en', label: '🇬🇧 English' },
-                      { id: 'ur', label: '🇵🇰 اردو' },
-                      { id: 'ar', label: '🇸🇦 العربية' }
+                      { id: 'en', label: '🇬🇧 English' }
                     ].map(item => (
                       <button
                         key={item.id}
@@ -1957,8 +1966,6 @@ export default function App() {
                       <option value="bn">🇧🇩 বাংলা (Bengali)</option>
                       <option value="hi">🇮🇳 हिन्दी (Hindi)</option>
                       <option value="en">🇬🇧 English</option>
-                      <option value="ur">🇵🇰 اردو (Urdu)</option>
-                      <option value="ar">🇸🇦 العربية (Arabic)</option>
                     </select>
                   </div>
 
