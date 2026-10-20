@@ -195,6 +195,12 @@ VIDEO_TYPES_CONFIG = {
 }
 
 # Engine-neutral performance cues the script writer may use; tts_engine renders them per engine
+LANGUAGE_NAMES = {
+    "bn": "Bengali (বাংলা)",
+    "hi": "Hindi (हिन्दी)",
+    "en": "English"
+}
+
 PERFORMANCE_CUES = ["[whispers]", "[softly]", "[excited]", "[sad]", "[sighs]", "[laughs]", "[gasps]", "[short pause]", "[long pause]"]
 
 def calculate_duration_profile(target_duration: int = 60) -> tuple[int, int, int]:
@@ -261,12 +267,7 @@ async def generate_story_script(
     target_duration: int = 60
 ) -> dict:
     """Uses Ollama to generate a structured storyboard script with dynamic high-retention visual cuts"""
-    lang_names = {
-        "bn": "Bengali (বাংলা)",
-        "hi": "Hindi (हिन्दी)",
-        "en": "English"
-    }
-    target_lang = lang_names.get(language, "Bengali (বাংলা)")
+    target_lang = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["bn"])
     cfg = VIDEO_TYPES_CONFIG.get(video_type, VIDEO_TYPES_CONFIG["story"])
 
     computed_scenes, words_target, words_per_scene = calculate_duration_profile(target_duration)
@@ -314,6 +315,10 @@ Respond ONLY with valid JSON in this exact structure:
   ]
 }}"""
 
+    return await ollama_json(system_prompt, f"Topic / Concept:\n{topic}", model=model, task="script generation")
+
+async def ollama_json(system_prompt: str, user_content: str, model: str | None = None, task: str = "generation") -> dict:
+    """Runs a JSON-mode Ollama chat, falling back through installed models, and frees VRAM afterwards."""
     # Free ComfyUI VRAM first so Ollama has full GPU headroom
     await free_gpu_memory(unload_comfy=True, unload_ollama=False)
 
@@ -336,13 +341,13 @@ Respond ONLY with valid JSON in this exact structure:
     last_error = None
     for candidate in candidate_models:
         try:
-            logger.info(f"Generating story script with Ollama model: {candidate}...")
+            logger.info(f"Ollama {task} with model: {candidate}...")
             async with httpx.AsyncClient(timeout=240.0) as client:
                 payload = {
                     "model": candidate,
                     "messages": [
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": f"Topic / Concept:\n{topic}"}
+                        {"role": "user", "content": user_content}
                     ],
                     "stream": False,
                     "format": "json",
@@ -363,7 +368,7 @@ Respond ONLY with valid JSON in this exact structure:
 
                 content = res.json()["message"]["content"]
                 result = parse_ollama_json(content)
-                logger.info(f"Successfully generated script with {candidate} ({len(result.get('scenes', []))} scenes)")
+                logger.info(f"Ollama {task} succeeded with {candidate}")
                 # Proactively unload Ollama model so 100% of GPU is ready for ComfyUI / F5-TTS
                 await free_gpu_memory(unload_comfy=False, unload_ollama=True)
                 return result
@@ -372,7 +377,7 @@ Respond ONLY with valid JSON in this exact structure:
             last_error = e
             await free_gpu_memory(unload_comfy=True, unload_ollama=True)
 
-    raise RuntimeError(f"Ollama script generation failed: {last_error}")
+    raise RuntimeError(f"Ollama {task} failed: {last_error}")
 
 async def get_active_ollama_model() -> str:
     try:
@@ -404,6 +409,66 @@ async def plan_script(prompt: str, language: str, video_type: str = "story", tar
 async def plan_story(prompt: str, language: str, model: str = None) -> dict:
     return await plan_script(prompt, language, video_type="story", target_duration=60, model=model)
 
+SCENE_FIELDS = ("narration", "delivery", "pause_after", "visual_prompt", "motion_prompt")
+
+async def refine_script(title: str, scenes: list[dict], instruction: str, language: str, video_type: str = "story") -> list[dict]:
+    """Revises an existing storyboard according to a user instruction.
+
+    Scenes the instruction does not touch are copied verbatim, so the worker can reuse
+    their already-rendered voiceover, image and clip.
+    """
+    target_lang = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["bn"])
+    cfg = VIDEO_TYPES_CONFIG.get(video_type, VIDEO_TYPES_CONFIG["story"])
+    current = [{k: sc.get(k) for k in SCENE_FIELDS if sc.get(k) is not None} for sc in scenes]
+    system_prompt = f"""{cfg['persona']}
+You are revising an existing video script titled "{title}" according to the director's instruction.
+
+Rules:
+- Apply the instruction faithfully. It may change narration, visuals, camera motion, pacing, or add/remove/reorder scenes.
+- Any scene the instruction does not affect MUST be copied back EXACTLY, character for character, so it does not need to be re-rendered.
+- "narration" stays STRICTLY in {target_lang}. "delivery", "visual_prompt" and "motion_prompt" stay in English.
+- Performance cues inside narration may only come from: {', '.join(PERFORMANCE_CUES)}.
+- Each scene keeps the fields: narration, delivery, pause_after, visual_prompt, motion_prompt.
+
+Respond ONLY with valid JSON: {{"scenes": [ ...every scene of the revised script, in order... ]}}"""
+    user_content = (
+        f"Current script (JSON):\n{json.dumps({'scenes': current}, ensure_ascii=False, indent=1)}\n\n"
+        f"Director's instruction:\n{instruction}"
+    )
+    result = await ollama_json(system_prompt, user_content, task="script refinement")
+    revised = []
+    for i, sc in enumerate(result.get("scenes") or []):
+        if not isinstance(sc, dict) or not str(sc.get("narration", "")).strip() or not str(sc.get("visual_prompt", "")).strip():
+            continue
+        clean = {k: sc[k] for k in SCENE_FIELDS if k in sc}
+        clean["id"] = i + 1
+        revised.append(clean)
+    if not revised:
+        raise ValueError("The AI did not return a usable revised script")
+    return revised
+
+async def refine_image_prompt(base_prompt: str, instruction: str, title: str = "") -> str:
+    """Rewrites an image prompt to apply a refinement instruction (used for thumbnail backgrounds)."""
+    system_prompt = """You write prompts for a photorealistic text-to-image model (Z-Image-Turbo).
+Rewrite the given prompt so the image satisfies the user's instruction while keeping everything the instruction does not change.
+The image is a video thumbnail background: one bold, instantly readable focal subject, strong contrast, dramatic lighting,
+and clean negative space for a headline. Never ask for text, letters or logos in the image.
+Respond ONLY with valid JSON: {"prompt": "the rewritten English prompt"}"""
+    user_content = f"Video title: {title}\nCurrent prompt: {base_prompt or '(none yet)'}\nInstruction: {instruction}"
+    result = await ollama_json(system_prompt, user_content, task="thumbnail prompt refinement")
+    prompt = str(result.get("prompt", "")).strip()
+    if not prompt:
+        raise ValueError("The AI did not return an image prompt")
+    return prompt
+
+async def suggest_thumbnail_headlines(title: str, synopsis: str, language: str) -> list[str]:
+    target_lang = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["bn"])
+    system_prompt = f"""You are a YouTube packaging expert. Write 5 short, high-click-through thumbnail headlines
+in {target_lang} for the video below. Each is 2-5 words, punchy, curiosity-driven, no hashtags, no emojis, no quotes.
+Respond ONLY with valid JSON: {{"headlines": ["...", "...", "...", "...", "..."]}}"""
+    result = await ollama_json(system_prompt, f"Title: {title}\nAbout: {synopsis}", task="thumbnail headlines")
+    return [str(h).strip() for h in (result.get("headlines") or []) if str(h).strip()][:5]
+
 def get_audio_duration(audio_path: Path) -> float:
     cmd = [
         FFPROBE, "-v", "error", "-show_entries", "format=duration",
@@ -422,7 +487,11 @@ def pad_audio_with_silence(audio_path: Path, seconds: float) -> Path:
     os.replace(tmp, audio_path)
     return audio_path
 
-async def generate_scene_image(visual_prompt: str, aspect: str, output_path: Path) -> Path:
+def comfy_subfolder(project_id: str) -> str:
+    """ComfyUI output subfolder for a project's renders, so they can be purged with it."""
+    return f"vidforge/{project_id}"
+
+async def generate_scene_image(visual_prompt: str, aspect: str, output_path: Path, project_id: str = "") -> Path:
     dims = ASPECT_RESOLUTIONS.get(aspect, ASPECT_RESOLUTIONS["9:16"])
     wf_path = BASE_DIR / "z_image_turbo_text_to_image_api.json"
     if not wf_path.exists():
@@ -439,6 +508,8 @@ async def generate_scene_image(visual_prompt: str, aspect: str, output_path: Pat
             node["inputs"]["height"] = dims["height"]
         elif title == "VF_SAMPLER":
             node["inputs"]["seed"] = random.randint(1, 2**31 - 1)
+        elif title == "VF_SAVE" and project_id:
+            node["inputs"]["filename_prefix"] = f"{comfy_subfolder(project_id)}/image"
 
     async with httpx.AsyncClient(timeout=300.0) as client:
         r = await client.post(f"{COMFYUI_URL}/prompt", json={"prompt": wf})
@@ -469,13 +540,13 @@ async def generate_scene_image(visual_prompt: str, aspect: str, output_path: Pat
 
     raise TimeoutError("ComfyUI Image generation timed out")
 
-async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, raw_clip_path: Path) -> bool:
+async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, raw_clip_path: Path, project_id: str = "") -> bool:
     """Invokes Wan 2.1 I2V in ComfyUI to animate the character/scene"""
     dims = ASPECT_RESOLUTIONS.get(aspect, ASPECT_RESOLUTIONS["9:16"])
     
     # 1. Place input image into ComfyUI input folder
     COMFYUI_INPUT.mkdir(parents=True, exist_ok=True)
-    input_filename = f"wan_in_{image_path.stem}.png"
+    input_filename = f"wan_in_{project_id}_{image_path.stem}.png" if project_id else f"wan_in_{image_path.stem}.png"
     dest_input = COMFYUI_INPUT / input_filename
     shutil.copy(image_path, dest_input)
 
@@ -592,7 +663,7 @@ async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, r
             "class_type": "SaveVideo",
             "inputs": {
                 "video": ["55", 0],
-                "filename_prefix": f"video/{prefix}",
+                "filename_prefix": f"{comfy_subfolder(project_id)}/{prefix}" if project_id else f"video/{prefix}",
                 "format": "auto",
                 "codec": "auto"
             }
@@ -714,16 +785,19 @@ def create_fallback_motion_clip(image_path: Path, duration: float, aspect: str, 
     subprocess.run(cmd, check=True, capture_output=True)
     return output_path
 
-async def animate_scene(image_path: Path, motion_prompt: str, duration: float, aspect: str, output_path: Path, fallback_idx: int = 0, motion_mode: str = "kenburns") -> Path:
-    """Full animation controller: supports Ken Burns (Ultra HD), Wan 2.1 AI Motion, and Clean Presentation"""
+def scene_motion_type(fallback_idx: int, motion_mode: str) -> str:
     mtypes = ["zoom_in", "pan_right", "zoom_out", "tilt_up", "pan_left"]
-    chosen_motion = mtypes[fallback_idx % len(mtypes)] if motion_mode != "static" else "static_subtle"
+    return mtypes[fallback_idx % len(mtypes)] if motion_mode != "static" else "static_subtle"
+
+async def animate_scene(image_path: Path, motion_prompt: str, duration: float, aspect: str, output_path: Path, fallback_idx: int = 0, motion_mode: str = "kenburns", project_id: str = "") -> Path:
+    """Full animation controller: supports Ken Burns (Ultra HD), Wan 2.1 AI Motion, and Clean Presentation"""
+    chosen_motion = scene_motion_type(fallback_idx, motion_mode)
 
     if motion_mode == "wan" and not WAN_SUPPORTED:
         logger.info(f"Wan 2.1 is not supported on {sys.platform}; using Ken Burns ({chosen_motion})")
     elif motion_mode == "wan":
         raw_wan = output_path.parent / f"raw_wan_{output_path.stem}.mp4"
-        success = await animate_scene_wan(image_path, motion_prompt, aspect, raw_wan)
+        success = await animate_scene_wan(image_path, motion_prompt, aspect, raw_wan, project_id=project_id)
         if success and raw_wan.exists() and raw_wan.stat().st_size > 1000:
             logger.info(f"Applying seamless ping-pong loop to Wan 2.1 clip for duration {duration:.2f}s...")
             await asyncio.to_thread(extend_video_to_duration, raw_wan, duration, aspect, output_path)

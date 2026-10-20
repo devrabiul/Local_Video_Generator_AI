@@ -8,6 +8,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "jobs" / "vidforge.db"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+RUNNING_STATUSES = ("SCRIPTING", "VOICEOVER", "GENERATING_IMAGES", "ANIMATING_VIDEO", "COMPOSING")
+# Fields the API may change directly on a project
+EDITABLE_FIELDS = {"title", "thumbnail", "thumbnail_design"}
+
 def get_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
@@ -40,6 +44,9 @@ def init_db():
                 music_volume INTEGER DEFAULT 100,
                 voice_volume INTEGER DEFAULT 100,
                 music_ducking INTEGER DEFAULT 1,
+                thumbnail_design TEXT DEFAULT '',
+                refine_instruction TEXT DEFAULT '',
+                revision INTEGER DEFAULT 1,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             )
@@ -54,12 +61,21 @@ def init_db():
             ("music_track", "TEXT DEFAULT ''"),
             ("music_volume", "INTEGER DEFAULT 100"),
             ("voice_volume", "INTEGER DEFAULT 100"),
-            ("music_ducking", "INTEGER DEFAULT 1")
+            ("music_ducking", "INTEGER DEFAULT 1"),
+            ("thumbnail_design", "TEXT DEFAULT ''"),
+            ("refine_instruction", "TEXT DEFAULT ''"),
+            ("revision", "INTEGER DEFAULT 1")
         ]:
             try:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
             except sqlite3.OperationalError:
                 pass
+        # A render cut off by a server restart can never finish; surface it so it can be regenerated
+        conn.execute(
+            f"UPDATE jobs SET status = 'FAILED', error_message = 'Interrupted by a server restart', "
+            f"current_step = 'Interrupted' WHERE status IN ({','.join('?' * len(RUNNING_STATUSES))})",
+            RUNNING_STATUSES
+        )
         conn.commit()
 
 def add_job(job_id: str, title: str, story_prompt: str, language: str, voice: str, aspect_ratio: str, 
@@ -143,4 +159,35 @@ def get_job(job_id: str):
 def delete_job(job_id: str):
     with get_connection() as conn:
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        conn.commit()
+
+def update_job_fields(job_id: str, **fields):
+    unknown = set(fields) - EDITABLE_FIELDS
+    if unknown:
+        raise ValueError(f"Not editable: {', '.join(sorted(unknown))}")
+    if not fields:
+        return
+    with get_connection() as conn:
+        conn.execute(
+            f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in fields)}, updated_at = ? WHERE id = ?",
+            [*fields.values(), time.time(), job_id]
+        )
+        conn.commit()
+
+def requeue_job(job_id: str, step: str, scenes_json: str | None = None, refine_instruction: str = ""):
+    """Puts an existing project back in the queue for a new revision; its current video stays available."""
+    updates = ["status = 'QUEUED'", "progress = 0", "current_step = ?", "error_message = ''",
+               "refine_instruction = ?", "revision = revision + 1", "updated_at = ?"]
+    params: list = [step, refine_instruction, time.time()]
+    if scenes_json is not None:
+        updates.append("scenes_json = ?")
+        params.append(scenes_json)
+    params.append(job_id)
+    with get_connection() as conn:
+        conn.execute(f"UPDATE jobs SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
+
+def clear_refine_instruction(job_id: str):
+    with get_connection() as conn:
+        conn.execute("UPDATE jobs SET refine_instruction = '' WHERE id = ?", (job_id,))
         conn.commit()

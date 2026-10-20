@@ -6,9 +6,12 @@ import {
   Plus, ArrowRight, BookOpen, Bot, Cpu, AlertTriangle,
   MessageSquare, Send, User, Key, Zap, ExternalLink, Mic, Upload, Settings, X, Sun, Moon,
   Newspaper, Presentation, GraduationCap, Megaphone, Clapperboard, Camera, UserRound, Flame,
-  Plane, Rabbit, Search, Music, type LucideIcon
+  Plane, Rabbit, Search, Music, FolderOpen, Image as ImageIcon, PartyPopper, Boxes, type LucideIcon
 } from 'lucide-react';
+import ModelsPage from './ModelsPage';
 import BackgroundMusicPicker, { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type MusicTrack } from './BackgroundMusicPicker';
+import ThumbnailStudio from './ThumbnailStudio';
+import ProjectReviseDialog from './ProjectReviseDialog';
 
 interface Scene {
   id: number;
@@ -19,6 +22,7 @@ interface Scene {
   pause_after?: number;
   duration?: number;
   image?: string;
+  image_url?: string;
 }
 
 interface Job {
@@ -43,6 +47,8 @@ interface Job {
   music_volume?: number;
   voice_volume?: number;
   music_ducking?: number;
+  thumbnail_design?: string;
+  revision?: number;
   created_at: number;
 }
 
@@ -291,7 +297,7 @@ const PERSONA_PROMPTS: Record<string, string> = {
 
 export default function App() {
   // Navigation State
-  const [activeTab, setActiveTab] = useState<"production" | "chat" | "ollama" | "voices" | "gallery">("production");
+  const [activeTab, setActiveTab] = useState<"production" | "chat" | "ollama" | "voices" | "gallery" | "models">("production");
 
   // ChatGPT-style Chat State
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([
@@ -369,6 +375,11 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showInspirations, setShowInspirations] = useState(false);
   const [dismissedFailedJobIds, setDismissedFailedJobIds] = useState<string[]>([]);
+  // Projects: thumbnail editor, refine/regenerate dialog, and the "video ready" prompt
+  const [thumbStudioJobId, setThumbStudioJobId] = useState<string | null>(null);
+  const [reviseTarget, setReviseTarget] = useState<{ id: string; mode: "refine" | "regenerate" } | null>(null);
+  const [justFinishedId, setJustFinishedId] = useState<string | null>(null);
+  const jobStatusRef = useRef<Record<string, Job['status']>>({});
 
   // Ollama Story Studio State
   const [ollamaModel, setOllamaModel] = useState<string>("qwen3.5:9b");
@@ -393,7 +404,7 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Switch tab safely with audio cleanup
-  const switchTab = (tab: "production" | "chat" | "ollama" | "voices" | "gallery") => {
+  const switchTab = (tab: "production" | "chat" | "ollama" | "voices" | "gallery" | "models") => {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -482,7 +493,11 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/api/jobs`);
       if (res.ok) {
-        const data = await res.json();
+        const data: Job[] = await res.json();
+        const previous = jobStatusRef.current;
+        const finished = data.find(j => j.status === 'DONE' && previous[j.id] && previous[j.id] !== 'DONE');
+        if (finished) setJustFinishedId(finished.id);
+        jobStatusRef.current = Object.fromEntries(data.map(j => [j.id, j.status]));
         setJobs(data);
       }
     } catch (e) {
@@ -1034,26 +1049,30 @@ export default function App() {
     setTimeout(() => setCopySuccess(false), 2500);
   };
 
-  // Delete Job
-  const handleDelete = async (jobId: string) => {
-    if (!confirm("Are you sure you want to remove this video?")) return;
+  // Delete a project and every file it produced
+  const handleDelete = async (job: Job) => {
+    const rendering = job.status !== 'DONE' && job.status !== 'FAILED';
+    const message = `Delete the project "${job.title}"?\n\n`
+      + "This permanently removes its video, thumbnail, script, voiceover, images and every other file it created."
+      + (rendering ? "\nThe render in progress will be stopped." : "");
+    if (!confirm(message)) return;
     try {
-      await fetch(`${API_BASE}/api/jobs/${jobId}`, { method: "DELETE" });
-      setJobs(jobs.filter(j => j.id !== jobId));
+      const res = await fetch(`${API_BASE}/api/jobs/${job.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setJobs(prev => prev.filter(j => j.id !== job.id));
+      if (justFinishedId === job.id) setJustFinishedId(null);
     } catch (e) {
       console.error("Delete failed", e);
+      alert("Could not delete the project. Is the backend running?");
     }
   };
 
-  const handleDismissFailed = async (jobId: string) => {
+  // Hides the banner only; the failed project stays in Projects so it can be regenerated
+  const handleDismissFailed = (jobId: string) => {
     setDismissedFailedJobIds(prev => [...prev, jobId]);
-    try {
-      await fetch(`${API_BASE}/api/jobs/${jobId}`, { method: "DELETE" });
-      setJobs(prev => prev.filter(j => j.id !== jobId));
-    } catch (e) {
-      console.error("Delete failed", e);
-    }
   };
+
+  const downloadUrl = (jobId: string, kind: "video" | "thumbnail") => `${API_BASE}/api/jobs/${jobId}/download/${kind}`;
 
   const RUNNING_STATUSES: Job['status'][] = ['SCRIPTING', 'VOICEOVER', 'GENERATING_IMAGES', 'ANIMATING_VIDEO', 'COMPOSING'];
   const runningJobs = jobs.filter(j => RUNNING_STATUSES.includes(j.status));
@@ -1061,6 +1080,10 @@ export default function App() {
   const queuedJobs = jobs.filter(j => j.status === 'QUEUED');
   const completedJobs = jobs.filter(j => j.status === 'DONE');
   const latestFailedJob = jobs.find(j => j.status === 'FAILED' && !dismissedFailedJobIds.includes(j.id));
+  const justFinishedJob = jobs.find(j => j.id === justFinishedId && j.status === 'DONE') || null;
+  const thumbStudioJob = jobs.find(j => j.id === thumbStudioJobId) || null;
+  const reviseJob = reviseTarget ? jobs.find(j => j.id === reviseTarget.id) || null : null;
+  const hasSceneImages = (job: Job) => !!job.scenes?.some(sc => sc.image_url);
 
   const getStatusBadge = (status: Job['status']) => {
     switch (status) {
@@ -1098,7 +1121,7 @@ export default function App() {
           <h1 className="brand-title">
             VidForge <span className="brand-title-accent">AI Studio</span>
           </h1>
-          <span className="brand-badge">PRO v2.5</span>
+          <span className="brand-badge">PRO v1.0</span>
         </a>
 
         {/* Engine stack (center) */}
@@ -1127,10 +1150,11 @@ export default function App() {
           { id: 'chat', label: 'Ollama AI Chat', meta: 'ChatGPT mode', Icon: MessageSquare },
           { id: 'ollama', label: 'Story & Script Studio', meta: 'Director Lab', Icon: Wand2 },
           { id: 'voices', label: 'Voice Artists', meta: 'F5 & Eleven', Icon: Volume2 },
-          { id: 'gallery', label: 'Video Gallery', meta: `${completedJobs.length} ready`, Icon: Video },
+          { id: 'gallery', label: 'Projects', meta: `${jobs.length} saved · ${completedJobs.length} ready`, Icon: FolderOpen },
+          { id: 'models', label: 'AI Models & Hardware', meta: 'Downloads, sizes, requirements', Icon: Boxes },
         ] as const).map(({ id, label, meta, Icon }, i) => (
           <Fragment key={id}>
-            {i === 4 && <span className="floating-dock-divider" aria-hidden="true" />}
+            {(i === 4 || i === 5) && <span className="floating-dock-divider" aria-hidden="true" />}
             <button
               type="button"
               className={`floating-tab-btn ${activeTab === id ? 'active' : ''}`}
@@ -1139,8 +1163,8 @@ export default function App() {
               aria-current={activeTab === id ? 'page' : undefined}
             >
               <Icon size={19} strokeWidth={activeTab === id ? 2.2 : 1.8} />
-              {id === 'gallery' && completedJobs.length > 0 && (
-                <span className="floating-count-badge">{completedJobs.length}</span>
+              {id === 'gallery' && jobs.length > 0 && (
+                <span className="floating-count-badge">{jobs.length}</span>
               )}
               <span className="floating-tab-tooltip" role="tooltip">
                 <span className="tooltip-title">{label}</span>
@@ -1635,6 +1659,33 @@ export default function App() {
             {/* Right Panel: Live Worker Monitor & Queue */}
             <section style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
               
+              {/* Video-ready prompt: next steps for the project that just finished */}
+              {justFinishedJob && (
+                <div className="glass-panel ready-banner">
+                  <div className="ready-banner-head">
+                    <PartyPopper size={18} color="var(--a-green)" />
+                    <h4>Your video is ready: {justFinishedJob.title}</h4>
+                    <button type="button" className="btn btn-icon btn-ghost" onClick={() => setJustFinishedId(null)} aria-label="Dismiss">
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <p>It's saved in Projects. Design a thumbnail for it, or refine it if it isn't quite right.</p>
+                  <div className="ready-banner-actions">
+                    {hasSceneImages(justFinishedJob) && (
+                      <button type="button" className="btn btn-primary" onClick={() => setThumbStudioJobId(justFinishedJob.id)}>
+                        <ImageIcon size={14} /> Design thumbnail
+                      </button>
+                    )}
+                    <button type="button" className="btn btn-ghost" onClick={() => setReviseTarget({ id: justFinishedJob.id, mode: "refine" })}>
+                      <Wand2 size={14} /> Refine
+                    </button>
+                    <a className="btn btn-ghost" href={downloadUrl(justFinishedJob.id, "video")}>
+                      <Download size={14} /> Download
+                    </a>
+                  </div>
+                </div>
+              )}
+
               {/* Failed Job Banner (if any) */}
               {latestFailedJob && (
                 <div className="glass-panel" style={{ padding: 18, background: 'rgb(239 68 68 / calc(0.08 * var(--tint)))' }}>
@@ -1650,11 +1701,16 @@ export default function App() {
                       onClick={() => handleDismissFailed(latestFailedJob.id)}
                       style={{ background: 'rgb(239 68 68 / calc(0.2 * var(--tint)))', border: '1px solid rgb(239 68 68 / calc(0.4 * var(--tint)))', color: 'var(--a-pink)', padding: '2px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}
                     >
-                      Dismiss / Clear
+                      Dismiss
                     </button>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--t-body)', lineHeight: 1.4, wordBreak: 'break-word', maxHeight: 90, overflowY: 'auto', background: 'var(--well)', padding: '6px 10px', borderRadius: 6 }}>
                     {latestFailedJob.error_message || 'An error occurred during video production.'}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                    <button type="button" className="btn btn-ghost" onClick={() => setReviseTarget({ id: latestFailedJob.id, mode: "regenerate" })}>
+                      <RefreshCw size={14} /> Try again
+                    </button>
                   </div>
                 </div>
               )}
@@ -1791,7 +1847,7 @@ export default function App() {
                           </span>
                           <button 
                             type="button"
-                            onClick={() => handleDelete(qj.id)} 
+                            onClick={() => handleDelete(qj)}
                             title="Cancel & Remove from Queue"
                             style={{ background: 'rgb(239 68 68 / calc(0.12 * var(--tint)))', border: '1px solid rgb(239 68 68 / calc(0.25 * var(--tint)))', color: 'var(--a-red-strong)', padding: '5px 8px', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                           >
@@ -1816,7 +1872,7 @@ export default function App() {
                       onClick={() => switchTab("gallery")}
                       style={{ background: 'none', color: 'var(--a-blue)', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}
                     >
-                      View All in Gallery <ArrowRight size={13} />
+                      View All Projects <ArrowRight size={13} />
                     </button>
                   </div>
 
@@ -1833,10 +1889,7 @@ export default function App() {
                         <div style={{ padding: 10 }}>
                           <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--t-strong)', marginBottom: 4 }}>{cj.title}</div>
                           <a
-                            href={`${API_BASE}${cj.output_video}`}
-                            download
-                            target="_blank"
-                            rel="noreferrer"
+                            href={downloadUrl(cj.id, "video")}
                             style={{ color: 'var(--a-green)', fontSize: 11, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600 }}
                           >
                             <Download size={12} /> Download Video
@@ -2661,40 +2714,41 @@ export default function App() {
         </div>
 
         {/* ========================================================================= */}
-        {/* TAB 4: COMPLETED VIDEOS GALLERY                                           */}
+        {/* TAB 4: PROJECTS (every generated video, with its thumbnail and revisions) */}
         {/* ========================================================================= */}
         <div className={`tab-pane ${activeTab === 'gallery' ? 'active' : ''}`}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             <div className="glass-panel page-head">
               <div>
-                <h2 className="page-title"><Video size={18} color="var(--a-blue)" /> Video Gallery</h2>
+                <h2 className="page-title"><FolderOpen size={18} color="var(--a-blue)" /> Projects</h2>
                 <p className="page-sub">
-                  উৎপাদিত সকল ভিডিও দেখুন, প্রিভিউ প্লে করুন এবং সরাসরি MP4 ডাউনলোড করুন।
+                  Every video you generate is saved here as a project. Design its thumbnail, refine or regenerate it, and download the video and thumbnail any time.
                 </p>
               </div>
               <div className="page-stats">
-                <div><strong>{completedJobs.length}</strong><span>Videos</span></div>
+                <div><strong>{jobs.length}</strong><span>Projects</span></div>
+                <div><strong>{completedJobs.length}</strong><span>Ready</span></div>
                 <div>
                   <strong>{Math.round(completedJobs.reduce((sum, j) => sum + (j.target_duration || 0), 0) / 60)}</strong>
                   <span>Minutes</span>
                 </div>
-                <div><strong>{completedJobs.reduce((sum, j) => sum + (j.scenes?.length || 0), 0)}</strong><span>Scenes</span></div>
               </div>
             </div>
 
-            {completedJobs.length === 0 ? (
+            {jobs.length === 0 ? (
               <div className="glass-panel empty-state">
-                <span className="empty-state-icon"><Video size={26} /></span>
-                <div className="empty-state-title">No completed videos yet</div>
-                <div className="empty-state-sub">Generate a video from the Production Studio or Story Studio and it will appear here.</div>
+                <span className="empty-state-icon"><FolderOpen size={26} /></span>
+                <div className="empty-state-title">No projects yet</div>
+                <div className="empty-state-sub">Generate a video from the Production Studio or Story Studio and it will be saved here as a project.</div>
                 <button type="button" className="btn btn-primary" onClick={() => switchTab('production')}>
                   <Plus size={14} /> Start a production
                 </button>
               </div>
             ) : (
               <div className="gallery-grid">
-                {completedJobs.map(cj => {
+                {jobs.map(cj => {
                   const typeInfo = VIDEO_TYPES.find(t => t.id === cj.video_type);
+                  const busy = cj.status === 'QUEUED' || RUNNING_STATUSES.includes(cj.status);
                   return (
                     <article key={cj.id} className="glass-panel gallery-card">
                       <div className="gallery-media">
@@ -2705,32 +2759,91 @@ export default function App() {
                             controls
                             preload="metadata"
                           />
+                        ) : cj.thumbnail ? (
+                          <img src={`${API_BASE}${cj.thumbnail}`} alt="" className="gallery-poster" />
                         ) : (
                           <Video size={32} color="var(--t-faint)" />
                         )}
                         <span className="gallery-aspect">{cj.aspect_ratio}</span>
+                        {(cj.revision || 1) > 1 && <span className="gallery-revision">v{cj.revision}</span>}
                       </div>
 
                       <div className="gallery-body">
-                        <h4 className="gallery-title" title={cj.title}>{cj.title}</h4>
+                        <div className="project-title-row">
+                          <h4 className="gallery-title" title={cj.title}>{cj.title}</h4>
+                          {cj.status !== 'DONE' && getStatusBadge(cj.status)}
+                        </div>
                         <div className="gallery-meta">
                           {typeInfo && <span className="chip chip-primary"><typeInfo.Icon size={11} /> {typeInfo.desc}</span>}
                           <span className="chip">{cj.language === 'bn' ? 'বাংলা' : cj.language === 'hi' ? 'हिन्दी' : 'English'}</span>
                           {cj.target_duration ? <span className="chip"><Clock size={11} /> {cj.target_duration >= 60 ? `${Math.round(cj.target_duration / 6) / 10}m` : `${cj.target_duration}s`}</span> : null}
                           {cj.scenes && cj.scenes.length > 0 && <span className="chip">{cj.scenes.length} scenes</span>}
                           {cj.music_track && <span className="chip" title={cj.music_track}><Music size={11} /> Music</span>}
+                          {cj.thumbnail_design && <span className="chip"><ImageIcon size={11} /> Custom thumbnail</span>}
                         </div>
+
+                        {busy && (
+                          <div className="project-progress">
+                            <div className="project-progress-text">
+                              <span>{cj.current_step || 'Waiting in queue'}</span>
+                              <strong>{cj.progress}%</strong>
+                            </div>
+                            <div className="project-progress-track"><div style={{ width: `${cj.progress}%` }} /></div>
+                            {cj.output_video && <span className="project-progress-note">The previous version stays available until this one finishes.</span>}
+                          </div>
+                        )}
+                        {cj.status === 'FAILED' && (
+                          <div className="project-error" title={cj.error_message}>
+                            <AlertTriangle size={13} /> {cj.error_message || 'Generation failed'}
+                          </div>
+                        )}
+
                         <div className="gallery-sub">
                           {new Date(cj.created_at * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} · {cj.voice}
                         </div>
 
                         <div className="gallery-actions">
-                          {cj.output_video && (
-                            <a className="btn btn-primary" href={`${API_BASE}${cj.output_video}`} download target="_blank" rel="noreferrer" style={{ flex: 1 }}>
-                              <Download size={14} /> Download MP4
+                          {cj.output_video ? (
+                            <a className="btn btn-primary" href={downloadUrl(cj.id, "video")} style={{ flex: 1 }}>
+                              <Download size={14} /> Video
                             </a>
+                          ) : (
+                            <button type="button" className="btn btn-primary" disabled style={{ flex: 1 }}>
+                              <Download size={14} /> Video
+                            </button>
                           )}
-                          <button type="button" className="btn btn-icon btn-danger-ghost" onClick={() => handleDelete(cj.id)} title="Delete video" aria-label={`Delete ${cj.title}`}>
+                          {cj.thumbnail ? (
+                            <a className="btn btn-ghost" href={downloadUrl(cj.id, "thumbnail")} style={{ flex: 1 }}>
+                              <Download size={14} /> Thumbnail
+                            </a>
+                          ) : (
+                            <button type="button" className="btn btn-ghost" disabled style={{ flex: 1 }}>
+                              <Download size={14} /> Thumbnail
+                            </button>
+                          )}
+                        </div>
+                        <div className="gallery-actions" style={{ paddingTop: 0, marginTop: 0 }}>
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            style={{ flex: 1 }}
+                            onClick={() => setThumbStudioJobId(cj.id)}
+                            disabled={!hasSceneImages(cj)}
+                            title={hasSceneImages(cj) ? "Design a thumbnail" : "Available once the scene images are rendered"}
+                          >
+                            <ImageIcon size={14} /> Design thumbnail
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            style={{ flex: 1 }}
+                            onClick={() => setReviseTarget({ id: cj.id, mode: cj.status === 'FAILED' ? "regenerate" : "refine" })}
+                            disabled={busy}
+                            title={busy ? "Wait for the current render to finish" : "Refine with a prompt or regenerate"}
+                          >
+                            <Wand2 size={14} /> Refine / Redo
+                          </button>
+                          <button type="button" className="btn btn-icon btn-danger-ghost" onClick={() => handleDelete(cj)} title="Delete project and all its files" aria-label={`Delete ${cj.title}`}>
                             <Trash2 size={14} />
                           </button>
                         </div>
@@ -2741,6 +2854,13 @@ export default function App() {
               </div>
             )}
           </div>
+        </div>
+
+        {/* ========================================================================= */}
+        {/* TAB 6: AI MODELS & HARDWARE REQUIREMENTS                                  */}
+        {/* ========================================================================= */}
+        <div className={`tab-pane ${activeTab === 'models' ? 'active' : ''}`}>
+          <ModelsPage apiBase={API_BASE} active={activeTab === 'models'} />
         </div>
 
       </main>
@@ -2894,6 +3014,30 @@ export default function App() {
       </div>
 
       {/* Voice API Key Modal (Gemini + ElevenLabs) */}
+      {thumbStudioJob && (
+        <ThumbnailStudio
+          key={thumbStudioJob.id}
+          apiBase={API_BASE}
+          project={thumbStudioJob}
+          onClose={() => setThumbStudioJobId(null)}
+          onSaved={fetchJobs}
+        />
+      )}
+
+      {reviseJob && reviseTarget && (
+        <ProjectReviseDialog
+          key={reviseJob.id}
+          apiBase={API_BASE}
+          project={reviseJob}
+          initialMode={reviseTarget.mode}
+          onClose={() => setReviseTarget(null)}
+          onQueued={() => {
+            if (justFinishedId === reviseJob.id) setJustFinishedId(null);
+            fetchJobs();
+          }}
+        />
+      )}
+
       {keyModal && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
           <div className="glass-panel modal-panel" style={{ width: '100%', maxWidth: 520, padding: 28 }}>

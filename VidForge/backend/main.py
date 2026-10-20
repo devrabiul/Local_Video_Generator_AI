@@ -1,23 +1,30 @@
 import asyncio
 import json
 import sys
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from typing import Literal
 from pydantic import BaseModel, Field
-from database import init_db, add_job, get_all_jobs, get_job, delete_job
+from database import (
+    init_db, add_job, get_all_jobs, get_job, delete_job, requeue_job, update_job_fields, RUNNING_STATUSES
+)
 from worker import worker_loop
 import ai_engine
+import model_catalog
 import music_library
+import projects
 import tts_engine
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-OUTPUT_DIR = BASE_DIR / "output"
-JOBS_DIR = BASE_DIR / "jobs"
+OUTPUT_DIR = projects.OUTPUT_DIR
+JOBS_DIR = projects.JOBS_DIR
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -75,6 +82,18 @@ class GenerateStoryRequest(BaseModel):
     scene_count: int | None = None
     video_type: str = "story"
     target_duration: int = 60
+
+class RegenerateRequest(BaseModel):
+    # script: new script, voice and visuals · media: keep script, new voice and visuals · visuals: keep script and voice
+    mode: Literal["script", "media", "visuals"] = "media"
+
+class RefineRequest(BaseModel):
+    instruction: str = Field(..., min_length=3, max_length=2000)
+
+class ThumbnailBackgroundRequest(BaseModel):
+    prompt: str = ""
+    instruction: str = ""
+    aspect_ratio: Literal["16:9", "9:16"] = "16:9"
 
 class ChatMessage(BaseModel):
     role: str
@@ -268,6 +287,28 @@ async def chat_with_ollama(req: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama chat error: {str(e)}")
 
+@app.get("/api/models")
+async def list_models():
+    catalog = model_catalog.catalog()
+    catalog["device"], catalog["local"] = await asyncio.gather(
+        asyncio.to_thread(model_catalog.device_info),
+        asyncio.to_thread(model_catalog.scan_device),
+    )
+    return catalog
+
+class VerifyModelRequest(BaseModel):
+    model_id: str
+    file_name: str = ""
+
+@app.post("/api/models/verify")
+async def verify_model_file(req: VerifyModelRequest):
+    try:
+        return await asyncio.to_thread(model_catalog.verify_hash, req.model_id, req.file_name)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e.args[0]) if e.args else "Cannot verify this file")
+
 @app.get("/api/music")
 def list_music():
     return {"tracks": music_library.list_tracks()}
@@ -318,8 +359,162 @@ def get_job_detail(job_id: str):
 
 @app.delete("/api/jobs/{job_id}")
 def remove_job(job_id: str):
+    """Deletes a project and every asset it produced. A render in progress is stopped by the worker."""
+    if not projects.is_valid_id(job_id):
+        raise HTTPException(status_code=400, detail="Invalid project id")
     delete_job(job_id)
+    projects.purge_project_files(job_id)
     return {"ok": True}
+
+# ---------------------------------------------------------------------------
+# Project revisions: regenerate / refine
+# ---------------------------------------------------------------------------
+
+REGENERATE_CLEARS = {
+    "script": ("audio_", "image_", "clip_", "raw_wan_", "tmp_", "scene_"),
+    "media": ("audio_", "image_", "clip_", "raw_wan_", "tmp_", "scene_"),
+    "visuals": ("image_", "clip_", "raw_wan_", "tmp_", "scene_"),
+}
+
+def _project_or_404(job_id: str) -> dict:
+    job = get_job(job_id) if projects.is_valid_id(job_id) else None
+    if not job:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return job
+
+def _revisable_project(job_id: str) -> dict:
+    job = _project_or_404(job_id)
+    if job["status"] == "QUEUED" or job["status"] in RUNNING_STATUSES:
+        raise HTTPException(status_code=409, detail="This project is already rendering. Wait for it to finish first.")
+    return job
+
+@app.post("/api/jobs/{job_id}/regenerate")
+def regenerate_project(job_id: str, req: RegenerateRequest):
+    _revisable_project(job_id)
+    work = projects.work_dir(job_id)
+    if work.exists():
+        for f in work.iterdir():
+            if f.is_file() and f.name.startswith(REGENERATE_CLEARS[req.mode]):
+                f.unlink(missing_ok=True)
+    labels = {"script": "new script, voice and visuals", "media": "new voiceover and visuals", "visuals": "new visuals"}
+    requeue_job(job_id, step=f"Queued to regenerate with {labels[req.mode]}",
+                scenes_json="[]" if req.mode == "script" else None)
+    return {"id": job_id, "status": "QUEUED"}
+
+@app.post("/api/jobs/{job_id}/refine")
+def refine_project(job_id: str, req: RefineRequest):
+    job = _revisable_project(job_id)
+    if not job.get("scenes"):
+        raise HTTPException(status_code=400, detail="This project has no script to refine yet. Regenerate it instead.")
+    requeue_job(job_id, step="Queued to refine with your instructions", refine_instruction=req.instruction.strip())
+    return {"id": job_id, "status": "QUEUED"}
+
+@app.get("/api/jobs/{job_id}/download/{kind}")
+def download_project_file(job_id: str, kind: Literal["video", "thumbnail"]):
+    job = _project_or_404(job_id)
+    path = projects.url_to_path(job.get("output_video" if kind == "video" else "thumbnail") or "")
+    if not path:
+        raise HTTPException(status_code=404, detail=f"This project has no {kind} yet")
+    suffix = path.suffix if kind == "video" else f"_thumbnail{path.suffix}"
+    return FileResponse(path, filename=projects.download_name(job["title"], suffix))
+
+# ---------------------------------------------------------------------------
+# Thumbnail Studio
+# ---------------------------------------------------------------------------
+
+MAX_IMAGE_BYTES = 15 * 1024 * 1024
+IMAGE_SIGNATURES = {b"\x89PNG\r\n\x1a\n": ".png", b"\xff\xd8\xff": ".jpg", b"RIFF": ".webp"}
+
+def _image_suffix(data: bytes) -> str:
+    for sig, suffix in IMAGE_SIGNATURES.items():
+        if data.startswith(sig) and (suffix != ".webp" or data[8:12] == b"WEBP"):
+            return suffix
+    raise HTTPException(status_code=400, detail="Only PNG, JPEG or WebP images are supported")
+
+async def _read_image(file: UploadFile) -> tuple[bytes, str]:
+    data = await file.read()
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image is too large (max 15 MB)")
+    return data, _image_suffix(data)
+
+def _thumb_backgrounds(job_id: str) -> list[str]:
+    work = projects.work_dir(job_id)
+    files = sorted(work.glob("thumb_bg_*"), key=lambda f: f.stat().st_mtime, reverse=True) if work.exists() else []
+    return [projects.work_url(job_id, f.name) for f in files]
+
+def _save_thumb_background(job_id: str, data: bytes, suffix: str) -> str:
+    work = projects.work_dir(job_id)
+    work.mkdir(parents=True, exist_ok=True)
+    name = f"thumb_bg_{int(time.time() * 1000)}{suffix}"
+    (work / name).write_bytes(data)
+    return projects.work_url(job_id, name)
+
+@app.post("/api/jobs/{job_id}/thumbnail")
+async def save_thumbnail(job_id: str, file: UploadFile = File(...), design: str = Form("{}")):
+    _project_or_404(job_id)
+    data, suffix = await _read_image(file)
+    try:
+        json.loads(design)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid thumbnail design data")
+    thumb = projects.new_output_path(job_id, "thumb", suffix)
+    thumb.write_bytes(data)
+    if get_job(job_id) is None:  # deleted while uploading
+        projects.purge_project_files(job_id)
+        raise HTTPException(status_code=404, detail="Project not found")
+    projects.remove_old_outputs(job_id, "thumb", keep=thumb)
+    url = projects.output_url(job_id, thumb.name)
+    update_job_fields(job_id, thumbnail=url, thumbnail_design=design)
+    return {"thumbnail": url}
+
+@app.get("/api/jobs/{job_id}/thumbnail/backgrounds")
+def list_thumbnail_backgrounds(job_id: str):
+    _project_or_404(job_id)
+    return {"backgrounds": _thumb_backgrounds(job_id)}
+
+@app.post("/api/jobs/{job_id}/thumbnail/backgrounds")
+async def generate_thumbnail_background(job_id: str, req: ThumbnailBackgroundRequest):
+    """Generates a new AI background. With an instruction, the prompt is first refined by the LLM."""
+    job = _project_or_404(job_id)
+    prompt = req.prompt.strip()
+    if req.instruction.strip():
+        try:
+            prompt = await ai_engine.refine_image_prompt(prompt, req.instruction.strip(), job["title"])
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Could not refine the prompt: {e}")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Describe the background you want")
+    work = projects.work_dir(job_id)
+    tmp = work / f"thumb_pending_{uuid.uuid4().hex[:8]}.png"  # not a scene-asset prefix, so worker cleanup leaves it alone
+    try:
+        await ai_engine.generate_scene_image(prompt, req.aspect_ratio, tmp, project_id=job_id)
+        if get_job(job_id) is None:
+            projects.purge_project_files(job_id)
+            raise HTTPException(status_code=404, detail="Project not found")
+        url = _save_thumb_background(job_id, tmp.read_bytes(), ".png")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Image generation failed (is ComfyUI running?): {e}")
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"url": url, "prompt": prompt}
+
+@app.post("/api/jobs/{job_id}/thumbnail/backgrounds/upload")
+async def upload_thumbnail_background(job_id: str, file: UploadFile = File(...)):
+    _project_or_404(job_id)
+    data, suffix = await _read_image(file)
+    return {"url": _save_thumb_background(job_id, data, suffix)}
+
+@app.post("/api/jobs/{job_id}/thumbnail/headlines")
+async def suggest_thumbnail_headlines(job_id: str):
+    job = _project_or_404(job_id)
+    synopsis = job.get("story_prompt") or " ".join(sc.get("narration", "") for sc in job.get("scenes", [])[:3])
+    try:
+        headlines = await ai_engine.suggest_thumbnail_headlines(job["title"], synopsis[:1500], job["language"])
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ollama could not suggest headlines: {e}")
+    return {"headlines": headlines}
 
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 app.mount("/jobs", StaticFiles(directory=str(JOBS_DIR)), name="jobs")
