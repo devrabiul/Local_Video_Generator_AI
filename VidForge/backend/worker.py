@@ -7,6 +7,7 @@ from pathlib import Path
 from loguru import logger
 from database import get_next_queued_job, update_job_status
 import ai_engine
+import music_library
 import tts_engine
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -25,7 +26,9 @@ async def process_job(job: dict):
         video_type = job.get("video_type") or "story"
         target_duration = int(job.get("target_duration") or 60)
         motion_mode = job.get("motion_mode") or "kenburns"
-        music_theme = job.get("music_theme") or "cinematic_epic"
+        music_file = music_library.resolve_track(job.get("music_track") or "")
+        if job.get("music_track") and not music_file:
+            logger.warning(f"Background music '{job['music_track']}' not found; continuing without music")
 
         # Step 1: Script & Scene Planning
         scenes = []
@@ -122,7 +125,7 @@ async def process_job(job: dict):
             scene_videos.append(vid_path)
 
         # Step 5: Final Composition & Cinematic Soundtrack Mix
-        update_job_status(job_id, status="COMPOSING", progress=94, current_step=f"Mixing soundtrack ({music_theme}) with audio ducking...")
+        update_job_status(job_id, status="COMPOSING", progress=94, current_step=f"Mixing voiceover with background music ({music_file.stem})..." if music_file else "Mixing final voiceover...")
         final_mp4 = OUTPUT_DIR / f"{job_id}.mp4"
         thumbnail = OUTPUT_DIR / f"{job_id}_thumb.png"
 
@@ -132,7 +135,10 @@ async def process_job(job: dict):
             scene_audios=scene_audios,
             output_path=final_mp4,
             aspect=job["aspect_ratio"],
-            music_theme=music_theme
+            music_file=music_file,
+            music_volume=100 if job.get("music_volume") is None else int(job["music_volume"]),
+            voice_volume=100 if job.get("voice_volume") is None else int(job["voice_volume"]),
+            music_ducking=bool(job.get("music_ducking", 1)),
         )
         if scene_images:
             shutil.copy(scene_images[0], thumbnail)

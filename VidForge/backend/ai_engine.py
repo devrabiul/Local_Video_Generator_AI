@@ -101,7 +101,6 @@ def video_encoder_args(quality: int) -> list[str]:
     return ["-c:v", enc]
 
 WORKFLOWS_DIR = BASE_DIR / "workflows"
-MUSIC_DIR = BASE_DIR / "music"
 
 ASPECT_RESOLUTIONS = {
     "9:16": {"width": 768, "height": 1344, "render_w": 1080, "render_h": 1920, "wan_w": 480, "wan_h": 832},
@@ -737,8 +736,33 @@ async def animate_scene(image_path: Path, motion_prompt: str, duration: float, a
     await asyncio.to_thread(create_fallback_motion_clip, image_path, duration, aspect, output_path, motion_type=chosen_motion)
     return output_path
 
-def assemble_final_video(scene_videos: list[Path], scene_audios: list[Path], output_path: Path, aspect: str, music_theme: str = "cinematic_epic") -> Path:
-    """Concatenates all animated scene clips and mixes voiceover with sidechain-ducked background music"""
+# Auto-balance targets: narration sits at a standard speech loudness and the music bed
+# ~14 LU below it, so speech stays clear before any ducking is applied.
+VOICE_TARGET_LUFS = -16
+MUSIC_TARGET_LUFS = -30
+
+
+def _gain(percent: int) -> float:
+    """UI level (100 = auto-balanced) -> linear gain, clamped to 0–200%."""
+    return max(0, min(200, int(percent))) / 100
+
+
+def assemble_final_video(
+    scene_videos: list[Path],
+    scene_audios: list[Path],
+    output_path: Path,
+    aspect: str,
+    music_file: Path | None = None,
+    music_volume: int = 100,
+    voice_volume: int = 100,
+    music_ducking: bool = True,
+) -> Path:
+    """Concatenates scene clips and the voiceover, optionally mixing in a background music bed.
+
+    Voice and music are loudness-normalised first (auto balance); music_volume / voice_volume
+    then adjust each relative to that balance. With ducking on, the music dips further while
+    the narrator speaks.
+    """
     job_dir = output_path.parent
     concat_file = job_dir / "concat_list.txt"
     with open(concat_file, "w", encoding="utf-8") as f:
@@ -756,30 +780,35 @@ def assemble_final_video(scene_videos: list[Path], scene_audios: list[Path], out
     subprocess.run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", str(full_video)], check=True, capture_output=True)
     subprocess.run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", str(audio_concat), "-c:a", "pcm_s16le", str(full_voice)], check=True, capture_output=True)
 
-    # Check for background music track
-    music_file = MUSIC_DIR / f"{music_theme}.mp3"
-    if not music_file.exists():
-        # Try alternate music in MUSIC_DIR
-        available = list(MUSIC_DIR.glob("*.mp3"))
-        if available:
-            music_file = available[0]
+    voice_chain = (
+        f"aresample=48000,loudnorm=I={VOICE_TARGET_LUFS}:TP=-1.5:LRA=11,aresample=48000,"
+        f"volume={_gain(voice_volume):.2f}"
+    )
+    use_music = music_file is not None and music_file.exists() and _gain(music_volume) > 0
 
-    if music_file and music_file.exists():
-        logger.info(f"Mixing background music: {music_file.name} with audio ducking")
-        # Total duration from video
+    if use_music:
         total_dur = get_audio_duration(full_voice)
-        fade_out_start = max(1.0, total_dur - 2.5)
-
-        # Sidechain ducking filter:
-        # [1:a] is voice. [2:a] is looped music.
-        # sidechaincompress ducks music when voice speaks (threshold 0.08, ratio 4:1)
-        # afade fades out music smoothly over the last 2.5 seconds
-        filter_complex = (
-            f"[2:a]volume=0.35,afade=t=out:st={fade_out_start:.2f}:d=2.5[bg];"
-            f"[1:a]asplit=2[sc][voice];"
-            f"[bg][sc]sidechaincompress=threshold=0.06:ratio=4:attack=50:release=450[ducked_music];"
-            f"[voice][ducked_music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+        fade_out = min(3.0, max(0.5, total_dur / 4))
+        fade_out_start = max(0.0, total_dur - fade_out)
+        logger.info(
+            f"Mixing background music: {music_file.name} (music {music_volume}%, voice {voice_volume}%, ducking {'on' if music_ducking else 'off'})"
         )
+        # [1:a] voice, [2:a] music looped to cover the whole narration
+        music_chain = (
+            f"[2:a]aresample=48000,loudnorm=I={MUSIC_TARGET_LUFS}:TP=-8:LRA=11,aresample=48000,"
+            f"volume={_gain(music_volume):.2f},"
+            f"afade=t=in:st=0:d=1.5,afade=t=out:st={fade_out_start:.2f}:d={fade_out:.2f}[bg];"
+        )
+        if music_ducking:
+            filter_complex = (
+                f"[1:a]{voice_chain},asplit=2[voice][sc];"
+                + music_chain
+                + "[bg][sc]sidechaincompress=threshold=0.02:ratio=6:attack=15:release=350[bed];"
+            )
+        else:
+            filter_complex = f"[1:a]{voice_chain}[voice];" + music_chain + "[bg]anull[bed];"
+        # normalize=0 keeps the balanced levels; the limiter guards against clipping
+        filter_complex += "[voice][bed]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95[aout]"
 
         cmd = [
             FFMPEG, "-y",
@@ -794,18 +823,19 @@ def assemble_final_video(scene_videos: list[Path], scene_audios: list[Path], out
             "-movflags", "+faststart",
             str(output_path)
         ]
-        subprocess.run(cmd, check=True, capture_output=True)
     else:
-        # Fallback without music bed
         cmd = [
             FFMPEG, "-y",
             "-i", str(full_video),
             "-i", str(full_voice),
+            "-filter_complex", f"[1:a]{voice_chain},alimiter=limit=0.95[aout]",
+            "-map", "0:v",
+            "-map", "[aout]",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
             str(output_path)
         ]
-        subprocess.run(cmd, check=True, capture_output=True)
+    subprocess.run(cmd, check=True, capture_output=True)
 
     return output_path

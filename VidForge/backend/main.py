@@ -8,10 +8,11 @@ import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from database import init_db, add_job, get_all_jobs, get_job, delete_job
 from worker import worker_loop
 import ai_engine
+import music_library
 import tts_engine
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -50,6 +51,11 @@ class CreateJobRequest(BaseModel):
     target_duration: int = 60
     motion_mode: str = "kenburns"
     music_theme: str = "cinematic_epic"
+    # Optional background music: "" = none; otherwise a track id from /api/music
+    music_track: str = ""
+    music_volume: int = Field(100, ge=0, le=200)
+    voice_volume: int = Field(100, ge=50, le=150)
+    music_ducking: bool = True
 
 class TTSConfigRequest(BaseModel):
     elevenlabs_api_key: str | None = None
@@ -262,6 +268,10 @@ async def chat_with_ollama(req: ChatRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ollama chat error: {str(e)}")
 
+@app.get("/api/music")
+def list_music():
+    return {"tracks": music_library.list_tracks()}
+
 @app.get("/api/jobs")
 def list_jobs():
     return get_all_jobs()
@@ -276,6 +286,8 @@ def create_job(req: CreateJobRequest):
     if req.tts_engine not in tts_engine.ENGINES:
         raise HTTPException(status_code=400, detail="Unknown TTS engine")
     voice_identifier = req.voice if ":" in req.voice else f"{req.tts_engine}:{req.voice}"
+    if req.music_track and not music_library.resolve_track(req.music_track):
+        raise HTTPException(status_code=400, detail="Selected background music track was not found")
 
     add_job(
         job_id=job_id,
@@ -289,7 +301,11 @@ def create_job(req: CreateJobRequest):
         target_duration=req.target_duration,
         motion_mode=req.motion_mode,
         music_theme=req.music_theme,
-        narrator_style=req.narrator_style
+        narrator_style=req.narrator_style,
+        music_track=req.music_track,
+        music_volume=req.music_volume,
+        voice_volume=req.voice_volume,
+        music_ducking=req.music_ducking
     )
     return {"id": job_id, "status": "QUEUED"}
 
@@ -307,6 +323,8 @@ def remove_job(job_id: str):
 
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 app.mount("/jobs", StaticFiles(directory=str(JOBS_DIR)), name="jobs")
+music_library.LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+app.mount(music_library.LIBRARY_URL, StaticFiles(directory=str(music_library.LIBRARY_DIR)), name="music-library")
 
 UI_DIST = BASE_DIR / "ui" / "dist"
 if UI_DIST.exists():

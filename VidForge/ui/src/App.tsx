@@ -6,8 +6,9 @@ import {
   Plus, ArrowRight, BookOpen, Bot, Cpu, AlertTriangle,
   MessageSquare, Send, User, Key, Zap, ExternalLink, Mic, Upload, Settings, X, Sun, Moon,
   Newspaper, Presentation, GraduationCap, Megaphone, Clapperboard, Camera, UserRound, Flame,
-  Plane, Rabbit, Search, type LucideIcon
+  Plane, Rabbit, Search, Music, type LucideIcon
 } from 'lucide-react';
+import BackgroundMusicPicker, { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type MusicTrack } from './BackgroundMusicPicker';
 
 interface Scene {
   id: number;
@@ -38,6 +39,10 @@ interface Job {
   target_duration?: number;
   motion_mode?: string;
   music_theme?: string;
+  music_track?: string;
+  music_volume?: number;
+  voice_volume?: number;
+  music_ducking?: number;
   created_at: number;
 }
 
@@ -354,6 +359,9 @@ export default function App() {
   const [targetDuration, setTargetDuration] = useState<number>(120); // Default to 2 minutes
   const [motionMode, setMotionMode] = useState<"kenburns" | "wan" | "static">("kenburns");
   const [musicTheme, setMusicTheme] = useState<string>("cinematic_epic");
+  const [musicTracks, setMusicTracks] = useState<MusicTrack[]>([]);
+  const [musicLoadFailed, setMusicLoadFailed] = useState(false);
+  const [musicSettings, setMusicSettings] = useState<MusicSettings>(DEFAULT_MUSIC_SETTINGS);
   const [storyPrompt, setStoryPrompt] = useState("");
   const [title, setTitle] = useState("");
   const [language, setLanguage] = useState<string>("bn");
@@ -492,6 +500,26 @@ export default function App() {
       console.error("TTS engines error:", e);
     }
   };
+
+  const fetchMusicTracks = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/music`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setMusicTracks((await res.json()).tracks || []);
+      setMusicLoadFailed(false);
+    } catch (e) {
+      console.error("Music library error:", e);
+      setMusicLoadFailed(true);
+    }
+  };
+
+  // Background music fields for /api/jobs ("" track = no music)
+  const musicJobFields = () => ({
+    music_track: musicSettings.enabled ? musicSettings.track : "",
+    music_volume: musicSettings.musicVolume,
+    voice_volume: musicSettings.voiceVolume,
+    music_ducking: musicSettings.ducking,
+  });
 
   const fetchTtsConfig = async () => {
     try {
@@ -699,6 +727,7 @@ export default function App() {
     fetchJobs();
     fetchEngines();
     fetchTtsConfig();
+    fetchMusicTracks();
     const interval = setInterval(() => {
       fetchJobs();
       fetchStatus();
@@ -899,7 +928,8 @@ export default function App() {
           video_type: videoType,
           target_duration: targetDuration,
           motion_mode: motionMode,
-          music_theme: musicTheme
+          music_theme: musicTheme,
+          ...musicJobFields()
         })
       });
 
@@ -977,7 +1007,8 @@ export default function App() {
           video_type: videoType,
           target_duration: targetDuration,
           motion_mode: motionMode,
-          music_theme: musicTheme
+          music_theme: musicTheme,
+          ...musicJobFields()
         })
       });
 
@@ -1566,6 +1597,16 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+
+                {/* Optional background music */}
+                <BackgroundMusicPicker
+                  apiBase={API_BASE}
+                  tracks={musicTracks}
+                  loadFailed={musicLoadFailed}
+                  onRetry={fetchMusicTracks}
+                  value={musicSettings}
+                  onChange={setMusicSettings}
+                />
 
                 {/* Submit */}
                 <button
@@ -2677,6 +2718,7 @@ export default function App() {
                           <span className="chip">{cj.language === 'bn' ? 'বাংলা' : cj.language === 'hi' ? 'हिन्दी' : 'English'}</span>
                           {cj.target_duration ? <span className="chip"><Clock size={11} /> {cj.target_duration >= 60 ? `${Math.round(cj.target_duration / 6) / 10}m` : `${cj.target_duration}s`}</span> : null}
                           {cj.scenes && cj.scenes.length > 0 && <span className="chip">{cj.scenes.length} scenes</span>}
+                          {cj.music_track && <span className="chip" title={cj.music_track}><Music size={11} /> Music</span>}
                         </div>
                         <div className="gallery-sub">
                           {new Date(cj.created_at * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} · {cj.voice}
@@ -2716,7 +2758,7 @@ export default function App() {
                 <button
                   type="button"
                   className="settings-icon-btn"
-                  onClick={() => { fetchJobs(); fetchStatus(); fetchTtsConfig(); fetchEngines(); }}
+                  onClick={() => { fetchJobs(); fetchStatus(); fetchTtsConfig(); fetchEngines(); fetchMusicTracks(); }}
                   title="Refresh status"
                 >
                   <RefreshCw size={13} />

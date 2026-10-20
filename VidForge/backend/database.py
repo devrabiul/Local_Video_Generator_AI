@@ -36,6 +36,10 @@ def init_db():
                 motion_mode TEXT DEFAULT 'kenburns',
                 music_theme TEXT DEFAULT 'cinematic_epic',
                 narrator_style TEXT DEFAULT '',
+                music_track TEXT DEFAULT '',
+                music_volume INTEGER DEFAULT 100,
+                voice_volume INTEGER DEFAULT 100,
+                music_ducking INTEGER DEFAULT 1,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             )
@@ -46,7 +50,11 @@ def init_db():
             ("target_duration", "INTEGER DEFAULT 60"),
             ("motion_mode", "TEXT DEFAULT 'kenburns'"),
             ("music_theme", "TEXT DEFAULT 'cinematic_epic'"),
-            ("narrator_style", "TEXT DEFAULT ''")
+            ("narrator_style", "TEXT DEFAULT ''"),
+            ("music_track", "TEXT DEFAULT ''"),
+            ("music_volume", "INTEGER DEFAULT 100"),
+            ("voice_volume", "INTEGER DEFAULT 100"),
+            ("music_ducking", "INTEGER DEFAULT 1")
         ]:
             try:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
@@ -56,13 +64,15 @@ def init_db():
 
 def add_job(job_id: str, title: str, story_prompt: str, language: str, voice: str, aspect_ratio: str, 
             scenes_json: str = "[]", video_type: str = "story", target_duration: int = 60, 
-            motion_mode: str = "kenburns", music_theme: str = "cinematic_epic", narrator_style: str = ""):
+            motion_mode: str = "kenburns", music_theme: str = "cinematic_epic", narrator_style: str = "",
+            music_track: str = "", music_volume: int = 100, voice_volume: int = 100, music_ducking: bool = True):
     now = time.time()
     with get_connection() as conn:
         conn.execute("""
-            INSERT INTO jobs (id, title, story_prompt, language, voice, aspect_ratio, status, progress, current_step, scenes_json, video_type, target_duration, motion_mode, music_theme, narrator_style, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', 0, 'Waiting in queue', ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (job_id, title, story_prompt, language, voice, aspect_ratio, scenes_json, video_type, target_duration, motion_mode, music_theme, narrator_style, now, now))
+            INSERT INTO jobs (id, title, story_prompt, language, voice, aspect_ratio, status, progress, current_step, scenes_json, video_type, target_duration, motion_mode, music_theme, narrator_style, music_track, music_volume, voice_volume, music_ducking, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', 0, 'Waiting in queue', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (job_id, title, story_prompt, language, voice, aspect_ratio, scenes_json, video_type, target_duration, motion_mode, music_theme, narrator_style,
+              music_track, music_volume, voice_volume, int(music_ducking), now, now))
         conn.commit()
 
 def get_next_queued_job():
