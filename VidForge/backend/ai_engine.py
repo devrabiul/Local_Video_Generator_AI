@@ -521,8 +521,110 @@ def normalize_plan(plan: dict, character_references: list[dict] | None = None, v
     return plan
 
 
-def compose_image_prompt(scene: dict) -> str:
-    """Scene prompt + fixed looks of characters in it + strict isolation + setting/style."""
+SHOT_CAMERA_ANGLES = [
+    "cinematic wide establishing shot, expansive depth of field, full environment framing",
+    "cinematic medium dynamic shot, engaging perspective, focused character action, rich visual depth",
+    "dramatic cinematic close-up shot, intense focal detail, expressive character reaction, atmospheric lighting",
+    "cinematic low angle heroic shot, dramatic upward perspective, powerful cinematic lighting",
+    "cinematic tracking cutaway perspective, atmospheric environmental depth, vivid cinematic angle",
+]
+
+
+def split_scene_into_shots(narration: str, duration: float) -> list[dict]:
+    """Splits a scene's narrative into 1 to 4 cinematic visual cutaway shots based on sentences and duration.
+    
+    Each shot receives its corresponding subtitle sentence and proportional duration.
+    """
+    clean = re.sub(r'\[[^\]]*\]', '', narration).strip()
+    if not clean:
+        return [{"text": "", "duration": duration, "index": 0}]
+
+    # Split by Bengali (।) and English sentence delimiters
+    parts = [s.strip() for s in re.split(r'([।?!.\n]+)', clean) if s.strip()]
+    sents = []
+    i = 0
+    while i < len(parts):
+        s = parts[i]
+        if i + 1 < len(parts) and re.match(r'^[।?!.\n]+$', parts[i + 1]):
+            s += parts[i + 1]
+            i += 1
+        sents.append(s)
+        i += 1
+
+    # Merge very short tokens (e.g. 1-2 words or numbers) with preceding sentence
+    merged: list[str] = []
+    for s in sents:
+        if merged and (len(merged[-1].split()) < 3 or len(merged[-1]) < 15):
+            merged[-1] = merged[-1] + " " + s
+        else:
+            merged.append(s)
+
+    # Cap shots so every shot has at least ~3.2s of screen time
+    max_shots = max(1, int(round(duration / 3.4)))
+
+    # If narration only had 1 sentence but duration is long (>= 6.5s), create 2 shots
+    if len(merged) <= 1 and duration >= 6.5 and max_shots >= 2:
+        comma_split = [c.strip() for c in re.split(r'([,;—]+)', clean) if c.strip()]
+        if len(comma_split) >= 3:
+            mid = len(comma_split) // 2
+            merged = [" ".join(comma_split[:mid]).strip(), " ".join(comma_split[mid:]).strip()]
+        else:
+            merged = [clean, clean]
+
+    # Limit to max_shots
+    if len(merged) > max_shots:
+        chunk_size = len(merged) / max_shots
+        condensed = []
+        for k in range(max_shots):
+            start = int(round(k * chunk_size))
+            end = int(round((k + 1) * chunk_size))
+            condensed.append(" ".join(merged[start:end]))
+        merged = condensed
+
+    num_shots = max(1, len(merged))
+    weights = [max(1, len(re.sub(r'\s+', '', s))) for s in merged]
+    total_w = sum(weights) or 1
+
+    shots = []
+    assigned_time = 0.0
+    for idx, (text_chunk, w) in enumerate(zip(merged, weights)):
+        if idx == num_shots - 1:
+            shot_dur = max(0.5, round(duration - assigned_time, 3))
+        else:
+            shot_dur = max(0.5, round(duration * (w / total_w), 3))
+            assigned_time += shot_dur
+        shots.append({
+            "index": idx,
+            "text": text_chunk.strip(),
+            "duration": shot_dur,
+        })
+    return shots
+
+
+def concat_shot_clips(shot_clips: list[Path], output_path: Path) -> Path:
+    """Concatenates multiple sub-shot clips into a seamless single scene video."""
+    if not shot_clips:
+        raise ValueError("Cannot concatenate empty list of shot clips")
+    if len(shot_clips) == 1:
+        if shot_clips[0] != output_path:
+            shutil.copy(shot_clips[0], output_path)
+        return output_path
+
+    concat_list = output_path.with_name(f"{output_path.stem}_concat.txt")
+    with open(concat_list, "w", encoding="utf-8") as f:
+        for clip in shot_clips:
+            f.write(f"file '{clip.as_posix()}'\n")
+
+    subprocess.run(
+        [FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list), "-c", "copy", str(output_path)],
+        check=True, capture_output=True,
+    )
+    concat_list.unlink(missing_ok=True)
+    return output_path
+
+
+def compose_image_prompt(scene: dict, shot_index: int = 0, total_shots: int = 1) -> str:
+    """Scene prompt + fixed looks of characters in it + strict isolation + setting/style + dynamic shot camera framing."""
     parts = []
 
     # 1. Base visual prompt
@@ -530,6 +632,11 @@ def compose_image_prompt(scene: dict) -> str:
     vp = str(vp).strip().rstrip(".")
     if vp and vp.lower() not in ("none", "null"):
         parts.append(vp)
+
+    # Dynamic camera framing for multi-shot visual progression within the scene
+    if total_shots > 1:
+        angle_cue = SHOT_CAMERA_ANGLES[shot_index % len(SHOT_CAMERA_ANGLES)]
+        parts.append(angle_cue)
 
     # 2. Characters & Cast Isolation
     cast_members = scene.get("cast") or []
@@ -545,9 +652,6 @@ def compose_image_prompt(scene: dict) -> str:
         if char_tokens:
             parts.append(f"Featuring: {', '.join(char_tokens)}")
             parts.append(f"Depict ONLY {', '.join(char_names)}. Strictly no extra people, no random bystanders, maintain consistent character appearance")
-    else:
-        parts.append("Environment and scenery only, no characters or extra people")
-
     if scene.get("location"):
         parts.append(f"Location: {scene['location']}")
     if scene.get("setting"):
@@ -801,17 +905,33 @@ def parse_direct_script_raw(text: str) -> list[dict]:
         })
     return scenes
 
-async def build_scenes_from_direct_script(prompt: str, language: str = "bn") -> list[dict]:
+async def build_scenes_from_direct_script(
+    prompt: str,
+    language: str = "bn",
+    character_references: list[dict] | None = None,
+    video_type: str = "story"
+) -> list[dict]:
     """Builds video scenes from an exact direct script.
     
     Guarantees that narration is 100% word-for-word identical to the user's input.
-    Generates English visual prompts for ComfyUI Z-Image Turbo if needed.
+    Generates English visual prompts for ComfyUI Z-Image Turbo if needed and guarantees
+    that uploaded character likeness definitions are attached to every scene.
     """
     raw_scenes = parse_direct_script_raw(prompt)
     if not raw_scenes:
         raise ValueError("Could not parse any scenes from the provided script. Please check formatting.")
 
     is_animation = any(w in prompt.lower() for w in ("animation", "animated", "cartoon", "3d animation", "anime", "pixar", "disney"))
+
+    cast = []
+    if character_references:
+        for cr in character_references:
+            if not isinstance(cr, dict):
+                continue
+            c_name = str(cr.get("name", "")).strip()
+            c_look = str(cr.get("look", "")).strip()
+            if c_name and c_look:
+                cast.append({"name": c_name, "look": c_look})
 
     # Check if any scene is missing an English visual prompt
     needs_visual = any(
@@ -827,11 +947,17 @@ async def build_scenes_from_direct_script(prompt: str, language: str = "bn") -> 
             if is_animation else
             "rich photorealistic cinematic lighting, detailed environment, dramatic camera angle, atmospheric lighting."
         )
+        cast_text = ""
+        if cast:
+            cast_lines = "\n".join(f"- {c['name']}: {c['look']}" for c in cast)
+            cast_text = f"\nMANDATORY PROTAGONISTS TO FEATURE IN EVERY VISUAL PROMPT:\n{cast_lines}\nEnsure the visual_prompt explicitly depicts these character(s) in action.\n"
+
         system_prompt = f"""You are a visual director for an AI image generator (Z-Image Turbo).
 The director has provided the exact voiceover narration for {len(raw_scenes)} scenes.
 DO NOT change, edit, or translate the voiceover narration.
+{cast_text}
 For each scene, write:
-1. "visual_prompt": A vivid English image prompt ({style_instruction}) illustrating what happens in that scene.
+1. "visual_prompt": A vivid English image prompt ({style_instruction}) illustrating what happens in that scene and featuring the protagonist.
 2. "action": One English sentence describing the visible action.
 3. "location": The place in English.
 4. "motion_prompt": Subtle cinematic motion (e.g. "slow push in, subtle breathing and dust motes").
@@ -868,10 +994,13 @@ Respond ONLY with valid JSON:
                 if not sc.get("visual_prompt") or any(ord(c) > 127 for c in sc.get("visual_prompt", "")):
                     sc["visual_prompt"] = f"{fallback_style}, scene depicting: {sc['narration'][:120]}"
 
-    # Final sanitization: ensure IDs, 0.0 pause for continuous speech, sanitize prompts to English
+    # Final sanitization: ensure IDs, cast likeness, 0.0 pause for continuous speech, sanitize prompts to English
     for i, sc in enumerate(raw_scenes):
         sc["id"] = i + 1
         sc["pause_after"] = 0.0
+        if cast:
+            sc["cast"] = cast
+            sc["characters"] = [c["name"] for c in cast]
         if not sc.get("music_level") or sc.get("music_level") not in MUSIC_LEVELS:
             sc["music_level"] = "medium"
         if not sc.get("motion_prompt"):
@@ -1588,27 +1717,30 @@ def format_srt_time(seconds: float) -> str:
     return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
 
 def generate_srt_subtitles(scenes: list[dict], scene_durations: list[float], output_srt: Path) -> Path:
-    """Generates standard UTF-8 SRT subtitles synchronized with scene durations."""
+    """Generates standard UTF-8 SRT subtitles synchronized with scene shot progressions."""
     lines = []
     current_time = 0.0
     sub_idx = 1
     for sc, dur in zip(scenes, scene_durations):
         raw_text = sc.get("narration", "")
-        clean_text = re.sub(r"\[[^\]]+\]", "", raw_text)
-        clean_text = re.sub(r"\s+", " ", clean_text).strip()
-        if not clean_text:
-            current_time += dur
-            continue
+        shots = split_scene_into_shots(raw_text, dur)
+        for sh in shots:
+            clean_text = re.sub(r"\[[^\]]+\]", "", sh.get("text", "")).strip()
+            clean_text = re.sub(r"\s+", " ", clean_text).strip()
+            shot_dur = sh.get("duration", dur)
+            if not clean_text:
+                current_time += shot_dur
+                continue
 
-        start_time = current_time
-        end_time = max(start_time + 0.5, current_time + dur - 0.08)
+            start_time = current_time
+            end_time = max(start_time + 0.5, current_time + shot_dur - 0.06)
 
-        lines.append(f"{sub_idx}")
-        lines.append(f"{format_srt_time(start_time)} --> {format_srt_time(end_time)}")
-        lines.append(clean_text)
-        lines.append("")
-        sub_idx += 1
-        current_time += dur
+            lines.append(f"{sub_idx}")
+            lines.append(f"{format_srt_time(start_time)} --> {format_srt_time(end_time)}")
+            lines.append(clean_text)
+            lines.append("")
+            sub_idx += 1
+            current_time += shot_dur
 
     output_srt.write_text("\n".join(lines), encoding="utf-8")
     return output_srt
@@ -1621,7 +1753,7 @@ def format_ass_time(seconds: float) -> str:
     return f"{hrs:d}:{mins:02d}:{secs:02d}.{centis:02d}"
 
 def generate_ass_subtitles(scenes: list[dict], scene_durations: list[float], aspect: str, output_ass: Path) -> Path:
-    """Generates standard UTF-8 ASS subtitles with Nirmala UI font for 100% accurate Bengali text shaping and optimal font scaling."""
+    """Generates standard UTF-8 ASS subtitles with Nirmala UI font synchronized with scene shot progressions."""
     dims = ASPECT_RESOLUTIONS.get(aspect, ASPECT_RESOLUTIONS["9:16"])
     rw, rh = dims["render_w"], dims["render_h"]
     is_vertical = rh > rw
@@ -1647,16 +1779,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     current_time = 0.0
     for sc, dur in zip(scenes, scene_durations):
         raw_text = sc.get("narration", "")
-        clean_text = re.sub(r"\[[^\]]+\]", "", raw_text)
-        clean_text = re.sub(r"\s+", " ", clean_text).strip()
-        if not clean_text:
-            current_time += dur
-            continue
+        shots = split_scene_into_shots(raw_text, dur)
+        for sh in shots:
+            clean_text = re.sub(r"\[[^\]]+\]", "", sh.get("text", "")).strip()
+            clean_text = re.sub(r"\s+", " ", clean_text).strip()
+            shot_dur = sh.get("duration", dur)
+            if not clean_text:
+                current_time += shot_dur
+                continue
 
-        start_time = current_time
-        end_time = max(start_time + 0.5, current_time + dur - 0.08)
-        dialogues.append(f"Dialogue: 0,{format_ass_time(start_time)},{format_ass_time(end_time)},Default,,0,0,0,,{clean_text}")
-        current_time += dur
+            start_time = current_time
+            end_time = max(start_time + 0.5, current_time + shot_dur - 0.06)
+            dialogues.append(f"Dialogue: 0,{format_ass_time(start_time)},{format_ass_time(end_time)},Default,,0,0,0,,{clean_text}")
+            current_time += shot_dur
+
+    output_ass.write_text(header + "\n".join(dialogues) + "\n", encoding="utf-8")
+    return output_ass
 
     output_ass.write_text(header + "\n".join(dialogues) + "\n", encoding="utf-8")
     return output_ass

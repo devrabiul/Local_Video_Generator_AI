@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import shutil
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -678,8 +679,122 @@ async def upload_character_image(
         "features_summary": analysis.get("features_summary", "")
     }
 
+# =========================================================================
+# Character Vault (Git-Tracked Persistent Characters)
+# =========================================================================
+CHARACTERS_VAULT_DIR = projects.BASE_DIR / "characters"
+CHARACTERS_AVATARS_DIR = CHARACTERS_VAULT_DIR / "avatars"
+CHARACTERS_JSON_PATH = CHARACTERS_VAULT_DIR / "characters.json"
+CHARACTERS_AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+if not CHARACTERS_JSON_PATH.exists():
+    CHARACTERS_JSON_PATH.write_text("[]", encoding="utf-8")
+
+def load_saved_characters() -> list[dict]:
+    if not CHARACTERS_JSON_PATH.exists():
+        return []
+    try:
+        return json.loads(CHARACTERS_JSON_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+def save_saved_characters(chars: list[dict]) -> None:
+    CHARACTERS_JSON_PATH.write_text(json.dumps(chars, ensure_ascii=False, indent=2), encoding="utf-8")
+
+@app.get("/api/characters")
+async def list_saved_characters():
+    return load_saved_characters()
+
+@app.post("/api/characters")
+async def create_or_update_saved_character(
+    name: str = Form(...),
+    look: str = Form(""),
+    features_summary: str = Form(""),
+    voice_preset: str = Form(""),
+    existing_image_url: str = Form(""),
+    file: UploadFile | None = File(None),
+    video_type: str = Form("animation")
+):
+    chars = load_saved_characters()
+    char_id = f"char_{uuid.uuid4().hex[:8]}"
+    avatar_url = ""
+
+    # Case A: User uploaded an image file directly
+    if file and file.filename:
+        data, suffix = await _read_image(file)
+        avatar_filename = f"{char_id}{suffix}"
+        avatar_path = CHARACTERS_AVATARS_DIR / avatar_filename
+        avatar_path.write_bytes(data)
+        avatar_url = f"/characters/avatars/{avatar_filename}"
+        
+        # If look is empty, auto-analyze face
+        if not look:
+            analysis = await ai_engine.extract_character_face_features(
+                image_path=avatar_path,
+                character_name=name,
+                video_type=video_type
+            )
+            look = analysis.get("look") or ""
+            if not features_summary:
+                features_summary = analysis.get("features_summary") or ""
+
+    # Case B: User already uploaded via /api/characters/upload and wants to save it to vault
+    elif existing_image_url:
+        if existing_image_url.startswith("/characters/avatars/"):
+            avatar_url = existing_image_url
+        else:
+            rel = existing_image_url.lstrip("/").replace("jobs/", "", 1)
+            src_file = projects.JOBS_DIR / rel
+            if src_file.exists():
+                suffix = src_file.suffix or ".png"
+                avatar_filename = f"{char_id}{suffix}"
+                avatar_path = CHARACTERS_AVATARS_DIR / avatar_filename
+                shutil.copy2(src_file, avatar_path)
+                avatar_url = f"/characters/avatars/{avatar_filename}"
+            else:
+                avatar_url = existing_image_url
+
+    new_char = {
+        "id": char_id,
+        "name": name.strip(),
+        "look": look.strip(),
+        "features_summary": features_summary.strip(),
+        "avatar_url": avatar_url,
+        "voice_preset": voice_preset.strip(),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    }
+    
+    # Check if a character with exact same name already exists -> update it, otherwise append
+    existing_idx = next((i for i, c in enumerate(chars) if c.get("name", "").strip().lower() == name.strip().lower()), None)
+    if existing_idx is not None:
+        if not avatar_url and chars[existing_idx].get("avatar_url"):
+            new_char["avatar_url"] = chars[existing_idx]["avatar_url"]
+        new_char["id"] = chars[existing_idx]["id"]
+        chars[existing_idx] = new_char
+    else:
+        chars.append(new_char)
+
+    save_saved_characters(chars)
+    return new_char
+
+@app.delete("/api/characters/{char_id}")
+async def delete_saved_character(char_id: str):
+    chars = load_saved_characters()
+    target = next((c for c in chars if c.get("id") == char_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    # Remove avatar file if it lives in /characters/avatars/
+    if target.get("avatar_url", "").startswith("/characters/avatars/"):
+        fname = target["avatar_url"].split("/")[-1]
+        (CHARACTERS_AVATARS_DIR / fname).unlink(missing_ok=True)
+
+    chars = [c for c in chars if c.get("id") != char_id]
+    save_saved_characters(chars)
+    return {"status": "ok", "deleted_id": char_id}
+
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 app.mount("/jobs", StaticFiles(directory=str(JOBS_DIR)), name="jobs")
+app.mount("/characters", StaticFiles(directory=str(CHARACTERS_VAULT_DIR)), name="characters")
 music_library.LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 app.mount(music_library.LIBRARY_URL, StaticFiles(directory=str(music_library.LIBRARY_DIR)), name="music-library")
 

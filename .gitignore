@@ -25,11 +25,13 @@ vidforge.db
 *.db
 *.sqlite3
 
-# Explicitly keep lightweight voice clones & royalty-free background music
+# Explicitly keep lightweight voice clones & royalty-free background music, and saved character vault
 !VidForge/backend/ref_voices/*.wav
 !VidForge/backend/ref_voices/*.mp3
 !VidForge/backend/ref_voices/manifest.json
 !VidForge/music/*.mp3
+!VidForge/characters/
+!VidForge/characters/**
 
 # Personal voice recordings for F5-TTS cloning stay on this machine
 VidForge/backend/ref_voices/custom/

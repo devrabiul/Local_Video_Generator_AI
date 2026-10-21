@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import traceback
 from pathlib import Path
@@ -61,6 +62,36 @@ async def process_job(job: dict):
             logger.warning(f"Background music '{job['music_track']}' not found; continuing without music")
 
         # Step 1: Script & Scene Planning
+        char_refs = []
+        if job.get("character_references"):
+            try:
+                char_refs = json.loads(job["character_references"])
+            except Exception:
+                char_refs = []
+
+        # If characters have an uploaded photo but no detailed look, extract facial likeness now
+        if char_refs:
+            for cr in char_refs:
+                if isinstance(cr, dict) and cr.get("image_url") and not cr.get("look"):
+                    raw_url = str(cr["image_url"]).lstrip("/")
+                    if raw_url.startswith("characters/"):
+                        local_img = projects.BASE_DIR / raw_url
+                    else:
+                        rel = raw_url.replace("jobs/", "", 1)
+                        local_img = projects.JOBS_DIR / rel
+                    if local_img.exists():
+                        logger.info(f"Extracting facial features for character '{cr.get('name')}' from {local_img}...")
+                        try:
+                            analysis = await ai_engine.extract_character_face_features(
+                                image_path=local_img,
+                                character_name=cr.get("name", "Protagonist"),
+                                video_type=video_type
+                            )
+                            if analysis.get("look"):
+                                cr["look"] = analysis["look"]
+                        except Exception as e:
+                            logger.warning(f"Could not extract face features for {cr.get('name')}: {e}")
+
         scenes = []
         narrator_style = job.get("narrator_style") or ""
         script_mode = job.get("script_mode", "ai_generate")
@@ -68,50 +99,39 @@ async def process_job(job: dict):
             try:
                 scenes = json.loads(job["scenes_json"])
                 logger.info(f"Using {len(scenes)} pre-planned scenes")
+                # Ensure custom character references are bound to scenes if not already set
+                if char_refs:
+                    cast_payload = [
+                        {"name": cr.get("name", "").strip(), "look": cr.get("look", "").strip()}
+                        for cr in char_refs if isinstance(cr, dict) and cr.get("name") and cr.get("look")
+                    ]
+                    if cast_payload:
+                        for sc in scenes:
+                            if not sc.get("cast"):
+                                sc["cast"] = cast_payload
+                            if not sc.get("characters"):
+                                sc["characters"] = [c["name"] for c in cast_payload]
             except Exception:
                 scenes = []
 
         if not scenes:
             raw_parsed = ai_engine.parse_direct_script_raw(job["story_prompt"])
             is_formatted_script = bool(
-                raw_parsed and len(raw_parsed) > 1 and any(
+                raw_parsed and len(raw_parsed) > 1 and bool(
                     re.search(r'Scene|দৃশ্য|Narration|ভয়েসওভার|Dialogue|সংবাদ', job["story_prompt"], re.I)
                 )
             )
             if script_mode == "direct" or is_formatted_script:
-                update_job_status(job_id, status="SCRIPTING", progress=10, current_step="Building visual scenes from exact script (Preserving full dialogue)...")
+                step_title = f"Building visual scenes from exact script with {len(char_refs)} character(s)..." if char_refs else "Building visual scenes from exact script (Preserving full dialogue)..."
+                update_job_status(job_id, status="SCRIPTING", progress=10, current_step=step_title)
                 scenes = await ai_engine.build_scenes_from_direct_script(
                     prompt=job["story_prompt"],
-                    language=job["language"]
+                    language=job["language"],
+                    character_references=char_refs,
+                    video_type=video_type
                 )
                 title = job.get("title") or "Direct Script Production"
             else:
-                char_refs = []
-                if job.get("character_references"):
-                    try:
-                        char_refs = json.loads(job["character_references"])
-                    except Exception:
-                        char_refs = []
-                
-                # If characters have an uploaded photo but no detailed look, extract facial likeness now
-                if char_refs:
-                    for cr in char_refs:
-                        if isinstance(cr, dict) and cr.get("image_url") and not cr.get("look"):
-                            rel = str(cr["image_url"]).lstrip("/").replace("jobs/", "", 1)
-                            local_img = projects.JOBS_DIR / rel
-                            if local_img.exists():
-                                logger.info(f"Extracting facial features for character '{cr.get('name')}' from {local_img}...")
-                                try:
-                                    analysis = await ai_engine.extract_character_face_features(
-                                        image_path=local_img,
-                                        character_name=cr.get("name", "Protagonist"),
-                                        video_type=video_type
-                                    )
-                                    if analysis.get("look"):
-                                        cr["look"] = analysis["look"]
-                                except Exception as e:
-                                    logger.warning(f"Could not extract face features for {cr.get('name')}: {e}")
-
                 step_title = f"Generating {video_type.title()} script with {len(char_refs)} custom character(s) (~{target_duration}s)..." if char_refs else f"Generating {video_type.title()} script (~{target_duration}s)..."
                 update_job_status(job_id, status="SCRIPTING", progress=10, current_step=step_title)
                 plan = await ai_engine.plan_script(
@@ -267,57 +287,103 @@ async def process_job(job: dict):
 
         update_job_status(job_id, status="VOICEOVER", progress=45, current_step="Voiceover complete. Starting AI image generation...", scenes_json=json.dumps(scenes, ensure_ascii=False))
 
-        # Step 3: Visual Generation with ComfyUI Z-Image-Turbo
-        update_job_status(job_id, status="GENERATING_IMAGES", progress=50, current_step="Rendering base visuals in ComfyUI...")
-        scene_images = []
-        for i, sc in enumerate(scenes):
+        # Step 3: Visual Generation with ComfyUI Z-Image-Turbo (Multi-shot cutaways per scene)
+        update_job_status(job_id, status="GENERATING_IMAGES", progress=50, current_step="Rendering multi-shot cinematic visuals in ComfyUI...")
+        scene_shots = []  # list of list of (shot_info, shot_image_path)
+        scene_images = [] # primary image for each scene (for thumbnails)
+
+        # Plan shots across all scenes (multi-image cutaways for long or multi-sentence scenes)
+        scene_shot_plans = [
+            ai_engine.split_scene_into_shots(sc.get("narration", ""), dur)
+            for sc, dur in zip(scenes, scene_durations)
+        ]
+        total_shots_all = sum(len(plan) for plan in scene_shot_plans)
+        shot_counter = 0
+
+        for i, (sc, dur, shot_plan) in enumerate(zip(scenes, scene_durations, scene_shot_plans)):
             _checkpoint(job_id)
-            image_prompt = ai_engine.compose_image_prompt(sc)
-            img_path = work_dir / f"image_{_asset_key(image_prompt, aspect, job_id)}.png"
-            progress = 50 + int((i / len(scenes)) * 20)
-            if img_path.exists():
-                update_job_status(job_id, status="GENERATING_IMAGES", progress=progress, current_step=f"Reusing image {i+1}/{len(scenes)}...")
-            else:
-                update_job_status(job_id, status="GENERATING_IMAGES", progress=progress, current_step=f"Generating image {i+1}/{len(scenes)}...")
-                tmp = work_dir / f"tmp_{img_path.name}"
-                await ai_engine.generate_scene_image(image_prompt, aspect, tmp, project_id=job_id)
-                os.replace(tmp, img_path)
-            sc["image"] = str(img_path)
-            sc["image_url"] = projects.work_url(job_id, img_path.name)
-            scene_images.append(img_path)
+            current_scene_shot_images = []
+            num_shots = len(shot_plan)
+
+            for sh in shot_plan:
+                _checkpoint(job_id)
+                j = sh["index"]
+                shot_counter += 1
+                progress = 50 + int((shot_counter / max(1, total_shots_all)) * 20)
+                image_prompt = ai_engine.compose_image_prompt(sc, shot_index=j, total_shots=num_shots)
+                img_path = work_dir / f"image_{_asset_key(image_prompt, aspect, job_id, j)}.png"
+
+                shot_label = f"scene {i+1}/{len(scenes)} (shot {j+1}/{num_shots})" if num_shots > 1 else f"scene {i+1}/{len(scenes)}"
+                if img_path.exists():
+                    update_job_status(job_id, status="GENERATING_IMAGES", progress=progress, current_step=f"Reusing visual for {shot_label}...")
+                else:
+                    update_job_status(job_id, status="GENERATING_IMAGES", progress=progress, current_step=f"Generating visual for {shot_label}...")
+                    tmp = work_dir / f"tmp_{img_path.name}"
+                    await ai_engine.generate_scene_image(image_prompt, aspect, tmp, project_id=job_id)
+                    os.replace(tmp, img_path)
+
+                current_scene_shot_images.append(img_path)
+
+            sc["image"] = str(current_scene_shot_images[0])
+            sc["image_url"] = projects.work_url(job_id, current_scene_shot_images[0].name)
+            sc["images"] = [str(p) for p in current_scene_shot_images]
+            scene_images.append(current_scene_shot_images[0])
+            scene_shots.append(list(zip(shot_plan, current_scene_shot_images)))
 
         # Step 4: Camera Motion & Transitions (Ultra HD Ken Burns or Wan 2.1)
         motion_label = "Ultra HD Ken Burns" if motion_mode == "kenburns" else ("Wan 2.1 AI Motion" if motion_mode == "wan" else "Clean Presentation")
-        update_job_status(job_id, status="ANIMATING_VIDEO", progress=72, current_step=f"Composing {motion_label} and transitions...")
+        update_job_status(job_id, status="ANIMATING_VIDEO", progress=72, current_step=f"Composing multi-shot {motion_label} and transitions...")
         scene_videos = []
-        for i, (img_path, dur, sc) in enumerate(zip(scene_images, scene_durations, scenes)):
+        anim_counter = 0
+
+        for i, (shots_info, dur, sc) in enumerate(zip(scene_shots, scene_durations, scenes)):
             _checkpoint(job_id)
             motion_desc = sc.get("motion_prompt", "cinematic camera movement")
-            key = _asset_key(img_path.name, round(dur, 3), aspect, motion_mode, fps, resolution,
-                             ai_engine.scene_motion_type(i, motion_mode),
-                             (motion_desc, ai_engine.WAN_QUALITY, ai_engine.pick_wan_model()) if motion_mode == "wan" else "")
-            vid_path = work_dir / f"clip_{key}.mp4"
-            progress = 72 + int((i / len(scenes)) * 20)
-            if vid_path.exists():
-                update_job_status(job_id, status="ANIMATING_VIDEO", progress=progress, current_step=f"Reusing camera motion for scene {i+1}/{len(scenes)}...")
+            sub_clips = []
+            num_shots = len(shots_info)
+
+            for sh, img_path in shots_info:
+                _checkpoint(job_id)
+                j = sh["index"]
+                anim_counter += 1
+                progress = 72 + int((anim_counter / max(1, total_shots_all)) * 20)
+                shot_dur = sh["duration"]
+                shot_motion = ai_engine.scene_motion_type(i * 3 + j, motion_mode)
+
+                key = _asset_key(img_path.name, round(shot_dur, 3), aspect, motion_mode, fps, resolution,
+                                 shot_motion,
+                                 (motion_desc, ai_engine.WAN_QUALITY, ai_engine.pick_wan_model()) if motion_mode == "wan" else "")
+                clip_path = work_dir / f"clip_{key}.mp4"
+
+                shot_label = f"scene {i+1}/{len(scenes)} (shot {j+1}/{num_shots})" if num_shots > 1 else f"scene {i+1}/{len(scenes)}"
+                if clip_path.exists():
+                    update_job_status(job_id, status="ANIMATING_VIDEO", progress=progress, current_step=f"Reusing camera motion for {shot_label}...")
+                else:
+                    step_text = f"Generating Wan 2.1 AI video for {shot_label}..." if motion_mode == "wan" else f"Composing camera motion for {shot_label}..."
+                    update_job_status(job_id, status="ANIMATING_VIDEO", progress=progress, current_step=step_text)
+                    tmp = work_dir / f"tmp_{clip_path.name}"
+                    await ai_engine.animate_scene(
+                        image_path=img_path,
+                        motion_prompt=motion_desc,
+                        duration=shot_dur,
+                        aspect=aspect,
+                        output_path=tmp,
+                        fallback_idx=i * 3 + j,
+                        motion_mode=motion_mode,
+                        project_id=job_id,
+                        resolution=resolution,
+                        fps=fps,
+                    )
+                    os.replace(tmp, clip_path)
+                sub_clips.append(clip_path)
+
+            if len(sub_clips) == 1:
+                scene_videos.append(sub_clips[0])
             else:
-                step_text = f"Generating Wan 2.1 AI neural video for scene {i+1}/{len(scenes)} (ComfyUI)..." if motion_mode == "wan" else f"Composing camera motion for scene {i+1}/{len(scenes)}..."
-                update_job_status(job_id, status="ANIMATING_VIDEO", progress=progress, current_step=step_text)
-                tmp = work_dir / f"tmp_{vid_path.name}"
-                await ai_engine.animate_scene(
-                    image_path=img_path,
-                    motion_prompt=motion_desc,
-                    duration=dur,
-                    aspect=aspect,
-                    output_path=tmp,
-                    fallback_idx=i,
-                    motion_mode=motion_mode,
-                    project_id=job_id,
-                    resolution=resolution,
-                    fps=fps,
-                )
-                os.replace(tmp, vid_path)
-            scene_videos.append(vid_path)
+                combined_scene_vid = work_dir / f"scene_{i}_{_asset_key([c.name for c in sub_clips])}.mp4"
+                if not combined_scene_vid.exists():
+                    await asyncio.to_thread(ai_engine.concat_shot_clips, sub_clips, combined_scene_vid)
+                scene_videos.append(combined_scene_vid)
 
         # Step 5: Final Composition & Cinematic Soundtrack Mix
         _checkpoint(job_id)

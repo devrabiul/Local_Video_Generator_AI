@@ -6,7 +6,7 @@ import {
   Plus, ArrowRight, BookOpen, Bot, Cpu, AlertTriangle,
   MessageSquare, Send, User, Key, Zap, ExternalLink, Mic, Upload, Settings, X, Sun, Moon,
   Newspaper, Presentation, GraduationCap, Megaphone, Clapperboard, Camera, UserRound, Flame,
-  Plane, Rabbit, Search, Music, FolderOpen, Image as ImageIcon, PartyPopper, Boxes, Subtitles, Workflow, FileText, HelpCircle, type LucideIcon
+  Plane, Rabbit, Search, Music, FolderOpen, Image as ImageIcon, PartyPopper, Boxes, Subtitles, Workflow, FileText, HelpCircle, Bookmark, Save, type LucideIcon
 } from 'lucide-react';
 import ModelsPage from './ModelsPage';
 import BackgroundMusicPicker, { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type MusicTrack } from './BackgroundMusicPicker';
@@ -73,6 +73,16 @@ interface CharacterRefState {
   previewUrl?: string;
   isAnalyzing?: boolean;
   featuresSummary?: string;
+}
+
+interface SavedCharacter {
+  id: string;
+  name: string;
+  look: string;
+  features_summary?: string;
+  avatar_url?: string;
+  voice_preset?: string;
+  created_at?: string;
 }
 
 interface SystemStatus {
@@ -524,6 +534,14 @@ export default function App() {
   const [fps, setFps] = useState<24 | 25 | 30 | 60>(30);
   const [enableCharacterRef, setEnableCharacterRef] = useState<boolean>(false);
   const [characterRefs, setCharacterRefs] = useState<CharacterRefState[]>([]);
+  const [savedCharacters, setSavedCharacters] = useState<SavedCharacter[]>([]);
+  const [isSavingToVault, setIsSavingToVault] = useState<Record<string, boolean>>({});
+  const [showCharacterVaultModal, setShowCharacterVaultModal] = useState<boolean>(false);
+  const [vaultNewName, setVaultNewName] = useState<string>("");
+  const [vaultNewLook, setVaultNewLook] = useState<string>("");
+  const [vaultNewFile, setVaultNewFile] = useState<File | null>(null);
+  const [vaultNewPreview, setVaultNewPreview] = useState<string>("");
+  const [vaultIsAnalyzing, setVaultIsAnalyzing] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showInspirations, setShowInspirations] = useState(false);
   const [dismissedFailedJobIds, setDismissedFailedJobIds] = useState<string[]>([]);
@@ -887,6 +905,147 @@ export default function App() {
     }
   };
 
+  const fetchSavedCharacters = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/characters`);
+      if (res.ok) {
+        const data = await res.json();
+        setSavedCharacters(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error("Failed to load saved characters:", err);
+    }
+  };
+
+  const handleSaveCharacterToVault = async (char: CharacterRefState) => {
+    if (!char.name.trim()) {
+      toast.error("অনুগ্রহ করে চরিত্রের একটি নাম দিন (Please enter character name)");
+      return;
+    }
+    setIsSavingToVault(prev => ({ ...prev, [char.id]: true }));
+    try {
+      const fd = new FormData();
+      fd.append("name", char.name.trim());
+      fd.append("look", char.look.trim());
+      if (char.featuresSummary) fd.append("features_summary", char.featuresSummary);
+      if (char.file) {
+        fd.append("file", char.file);
+      } else if (char.imageUrl) {
+        fd.append("existing_image_url", char.imageUrl);
+      }
+      fd.append("video_type", videoType);
+
+      const res = await fetch(`${API_BASE}/api/characters`, {
+        method: "POST",
+        body: fd
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        toast.success(`'${saved.name}' ভল্টে সফলভাবে সেভ করা হয়েছে!`);
+        await fetchSavedCharacters();
+      } else {
+        toast.error("চরিত্র সেভ করতে ব্যর্থ হয়েছে");
+      }
+    } catch (err) {
+      console.error("Failed to save character to vault:", err);
+      toast.error("ভল্টে সেভ করতে সমস্যা হয়েছে");
+    } finally {
+      setIsSavingToVault(prev => ({ ...prev, [char.id]: false }));
+    }
+  };
+
+  const handleDeleteSavedCharacter = async (charId: string, name: string) => {
+    if (!window.confirm(`আপনি কি সত্যিই '${name}' চরিত্রটি ভল্ট থেকে মুছে ফেলতে চান?`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/characters/${charId}`, { method: "DELETE" });
+      if (res.ok) {
+        toast.success(`'${name}' ভল্ট থেকে মুছে ফেলা হয়েছে`);
+        await fetchSavedCharacters();
+      }
+    } catch (err) {
+      console.error("Failed to delete character:", err);
+      toast.error("মুছে ফেলতে সমস্যা হয়েছে");
+    }
+  };
+
+  const handleSelectSavedCharacter = (saved: SavedCharacter) => {
+    setEnableCharacterRef(true);
+    const avatarUrl = saved.avatar_url ? (saved.avatar_url.startsWith("http") ? saved.avatar_url : `${API_BASE}${saved.avatar_url}`) : "";
+    
+    // Check if already in active cast
+    const existing = characterRefs.find(c => c.name.toLowerCase() === saved.name.toLowerCase());
+    if (existing) {
+      toast.info(`'${saved.name}' ইতোমধ্যে সক্রিয় তালিকায় আছে`);
+      return;
+    }
+
+    // If only one character slot exists and is blank, replace it
+    if (characterRefs.length === 1 && !characterRefs[0].name && !characterRefs[0].imageUrl && !characterRefs[0].file) {
+      setCharacterRefs([{
+        id: `char_${Date.now()}`,
+        name: saved.name,
+        look: saved.look,
+        imageUrl: avatarUrl,
+        previewUrl: avatarUrl,
+        featuresSummary: saved.features_summary || ""
+      }]);
+    } else if (characterRefs.length < 2) {
+      setCharacterRefs(prev => [
+        ...prev,
+        {
+          id: `char_${Date.now()}`,
+          name: saved.name,
+          look: saved.look,
+          imageUrl: avatarUrl,
+          previewUrl: avatarUrl,
+          featuresSummary: saved.features_summary || ""
+        }
+      ]);
+    } else {
+      toast.error("সর্বোচ্চ ২টি চরিত্র একসাথে যোগ করা যায়। অনুগ্রহ করে একটি চরিত্র মুছে এটি যোগ করুন।");
+      return;
+    }
+    toast.success(`'${saved.name}' কাস্টে যুক্ত হয়েছে!`);
+  };
+
+  const handleCreateVaultCharacter = async () => {
+    if (!vaultNewName.trim()) {
+      toast.error("চরিত্রের নাম দিন");
+      return;
+    }
+    setVaultIsAnalyzing(true);
+    try {
+      const fd = new FormData();
+      fd.append("name", vaultNewName.trim());
+      fd.append("look", vaultNewLook.trim());
+      if (vaultNewFile) {
+        fd.append("file", vaultNewFile);
+      }
+      fd.append("video_type", videoType);
+
+      const res = await fetch(`${API_BASE}/api/characters`, {
+        method: "POST",
+        body: fd
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        toast.success(`'${saved.name}' ভল্টে সংরক্ষিত হয়েছে!`);
+        setVaultNewName("");
+        setVaultNewLook("");
+        setVaultNewFile(null);
+        setVaultNewPreview("");
+        await fetchSavedCharacters();
+      } else {
+        toast.error("ভল্টে চরিত্র যোগ করতে ব্যর্থ হয়েছে");
+      }
+    } catch (err) {
+      console.error("Failed to create vault character:", err);
+      toast.error("সমস্যা হয়েছে");
+    } finally {
+      setVaultIsAnalyzing(false);
+    }
+  };
+
   const setVoiceRecording = (blob: Blob, filename: string) => {
     if (newVoiceUrl) URL.revokeObjectURL(newVoiceUrl);
     setNewVoiceFile(new File([blob], filename, { type: blob.type }));
@@ -989,7 +1148,8 @@ export default function App() {
           fetchJobs(),
           fetchEngines(),
           fetchTtsConfig(),
-          fetchMusicTracks()
+          fetchMusicTracks(),
+          fetchSavedCharacters()
         ]);
       } finally {
         setTimeout(() => {
@@ -2027,6 +2187,115 @@ Visual: An iron axe splashing into deep river water, dramatic camera.`}
                         </div>
                       </div>
 
+                      {/* Character Vault Bar (Git-Tracked) */}
+                      <div style={{
+                        background: 'var(--surface-hover)',
+                        border: '1px solid var(--line)',
+                        borderRadius: 9,
+                        padding: '10px 12px',
+                        marginBottom: 12
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Bookmark size={13} color="var(--a-purple)" />
+                            <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--t-strong)' }}>
+                              সংরক্ষিত চরিত্র ভল্ট (Saved Characters Vault)
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShowCharacterVaultModal(true)}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: 'var(--a-purple)',
+                              fontSize: 10.5,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4
+                            }}
+                          >
+                            <Settings size={12} /> ভল্ট দেখুন / যোগ করুন ({savedCharacters.length})
+                          </button>
+                        </div>
+
+                        {savedCharacters.length === 0 ? (
+                          <div style={{ fontSize: 11, color: 'var(--t-muted)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <span>ভল্টে এখনও কোনো চরিত্র সেভ করা নেই। নিচে ছবি ও নাম দিয়ে 'Save to Vault' চাপুন।</span>
+                            <button
+                              type="button"
+                              onClick={() => setShowCharacterVaultModal(true)}
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '3px 8px', fontSize: 10.5 }}
+                            >
+                              <Plus size={11} /> নতুন চরিত্র যোগ করুন
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                            {savedCharacters.map(sc => {
+                              const isSelected = characterRefs.some(c => c.name.toLowerCase() === sc.name.toLowerCase());
+                              return (
+                                <button
+                                  key={sc.id}
+                                  type="button"
+                                  onClick={() => handleSelectSavedCharacter(sc)}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    padding: '3px 8px 3px 4px',
+                                    borderRadius: 20,
+                                    background: isSelected ? 'rgb(168 85 247 / 0.25)' : 'var(--surface)',
+                                    border: isSelected ? '1px solid var(--a-purple)' : '1px solid var(--line)',
+                                    color: isSelected ? 'var(--a-purple)' : 'var(--t-body)',
+                                    cursor: 'pointer',
+                                    fontSize: 11,
+                                    fontWeight: isSelected ? 700 : 500,
+                                    transition: 'all 0.15s ease'
+                                  }}
+                                  title={sc.look || sc.name}
+                                >
+                                  {sc.avatar_url ? (
+                                    <img
+                                      src={sc.avatar_url.startsWith("http") ? sc.avatar_url : `${API_BASE}${sc.avatar_url}`}
+                                      alt={sc.name}
+                                      style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover' }}
+                                    />
+                                  ) : (
+                                    <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'rgb(168 85 247 / 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                      <User size={11} />
+                                    </div>
+                                  )}
+                                  <span>{sc.name}</span>
+                                  {isSelected && <Check size={11} />}
+                                </button>
+                              );
+                            })}
+                            <button
+                              type="button"
+                              onClick={() => setShowCharacterVaultModal(true)}
+                              style={{
+                                padding: '3px 8px',
+                                borderRadius: 20,
+                                background: 'transparent',
+                                border: '1px dashed var(--line)',
+                                color: 'var(--t-muted)',
+                                cursor: 'pointer',
+                                fontSize: 10.5,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 4
+                              }}
+                            >
+                              <Plus size={11} /> ভল্ট
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
                       <div style={{ display: 'grid', gridTemplateColumns: characterRefs.length > 1 ? '1fr 1fr' : '1fr', gap: 10 }}>
                         {characterRefs.map((char, idx) => (
                           <div key={char.id} style={{ background: 'var(--surface-hover)', border: '1px solid var(--line)', borderRadius: 9, padding: '10px 12px' }}>
@@ -2034,16 +2303,45 @@ Visual: An iron axe splashing into deep river water, dramatic camera.`}
                               <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--a-purple)' }}>
                                 চরিত্র {idx + 1} (Character {idx + 1})
                               </span>
-                              {characterRefs.length > 1 && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <button
                                   type="button"
-                                  onClick={() => setCharacterRefs(characterRefs.filter(c => c.id !== char.id))}
-                                  style={{ background: 'transparent', border: 'none', color: 'var(--a-red)', cursor: 'pointer', padding: 2 }}
-                                  title="Remove character"
+                                  onClick={() => handleSaveCharacterToVault(char)}
+                                  disabled={isSavingToVault[char.id] || !char.name.trim()}
+                                  style={{
+                                    background: 'rgb(168 85 247 / 0.15)',
+                                    border: '1px solid rgb(168 85 247 / 0.3)',
+                                    color: 'var(--a-purple)',
+                                    cursor: char.name.trim() ? 'pointer' : 'not-allowed',
+                                    borderRadius: 5,
+                                    padding: '2px 7px',
+                                    fontSize: 10,
+                                    fontWeight: 600,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 3,
+                                    opacity: char.name.trim() ? 1 : 0.5
+                                  }}
+                                  title="এই চরিত্রটি ভল্টে সেভ রাখুন যাতে পরবর্তীতে ১-ক্লিকে ব্যবহার করা যায়"
                                 >
-                                  <Trash2 size={13} />
+                                  {isSavingToVault[char.id] ? (
+                                    <RefreshCw size={10} className="animate-spin" />
+                                  ) : (
+                                    <Save size={10} />
+                                  )}
+                                  <span>ভল্টে সেভ</span>
                                 </button>
-                              )}
+                                {characterRefs.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setCharacterRefs(characterRefs.filter(c => c.id !== char.id))}
+                                    style={{ background: 'transparent', border: 'none', color: 'var(--a-red)', cursor: 'pointer', padding: 2 }}
+                                    title="Remove character"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                )}
+                              </div>
                             </div>
 
                             {/* Photo Upload Area */}
@@ -3965,6 +4263,208 @@ Visual: An iron axe splashing into deep river water, dramatic camera.`}
           )}
         </button>
       </div>
+
+      {/* Character Vault & Management Modal */}
+      {showCharacterVaultModal && (
+        <div className="studio-overlay" role="dialog" aria-modal="true" style={{ zIndex: 10000 }}>
+          <div className="glass-panel modal-panel" style={{ maxWidth: 640, maxHeight: '88vh', display: 'flex', flexDirection: 'column', padding: 22, textAlign: 'left' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, borderBottom: '1px solid var(--line)', paddingBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 9, background: 'rgb(168 85 247 / 0.18)', color: 'var(--a-purple)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Bookmark size={20} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--t-strong)' }}>
+                    সংরক্ষিত চরিত্র ভল্ট (Character Vault)
+                  </h3>
+                  <span style={{ fontSize: 11, color: 'var(--t-muted)' }}>
+                    আপনার পছন্দের স্থায়ী চরিত্রসমূহ (Saved Character Vault)
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCharacterVaultModal(false)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--t-muted)', cursor: 'pointer', padding: 4 }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ overflowY: 'auto', flex: 1, paddingRight: 4 }}>
+              {/* Add New Character Card */}
+              <div style={{
+                background: 'var(--surface-hover)',
+                border: '1px solid var(--line)',
+                borderRadius: 10,
+                padding: '12px 14px',
+                marginBottom: 18
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--t-strong)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Plus size={14} color="var(--a-purple)" /> নতুন চরিত্র তৈরি ও সেভ করুন (Add New Character to Vault)
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: 12, alignItems: 'start', marginBottom: 10 }}>
+                  <div style={{
+                    width: 80, height: 80, borderRadius: 10,
+                    border: '1px dashed var(--line)',
+                    background: 'var(--surface)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    overflow: 'hidden', position: 'relative'
+                  }}>
+                    {vaultNewPreview ? (
+                      <img src={vaultNewPreview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', cursor: 'pointer', color: 'var(--t-muted)', fontSize: 10, width: '100%', height: '100%', justifyContent: 'center' }}>
+                        <Upload size={18} />
+                        <span style={{ marginTop: 2 }}>ছবি দিন</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          style={{ display: 'none' }}
+                          onChange={e => {
+                            const f = e.target.files?.[0];
+                            if (f) {
+                              setVaultNewFile(f);
+                              setVaultNewPreview(URL.createObjectURL(f));
+                            }
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div>
+                      <input
+                        type="text"
+                        placeholder="চরিত্রের নাম (যেমন: Sharmin / Rabiul)"
+                        value={vaultNewName}
+                        onChange={e => setVaultNewName(e.target.value)}
+                        style={{ width: '100%', padding: '7px 9px', fontSize: 12 }}
+                      />
+                    </div>
+                    <div>
+                      <textarea
+                        rows={2}
+                        placeholder="চেহারা ও কার্টুন বৈশিষ্ট্য (ফাঁকা রাখলে AI ছবি থেকে স্বয়ংক্রিয়ভাবে লিখবে)"
+                        value={vaultNewLook}
+                        onChange={e => setVaultNewLook(e.target.value)}
+                        style={{ width: '100%', padding: '6px 9px', fontSize: 11.5, resize: 'vertical' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={handleCreateVaultCharacter}
+                    disabled={vaultIsAnalyzing || !vaultNewName.trim()}
+                    className="btn btn-primary btn-sm"
+                    style={{ fontSize: 11 }}
+                  >
+                    {vaultIsAnalyzing ? (
+                      <><RefreshCw size={12} className="animate-spin" /> AI বিশ্লেষণ করছে ও সেভ হচ্ছে...</>
+                    ) : (
+                      <><Save size={12} /> ভল্টে সেভ করুন (Save to Vault)</>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Saved Characters List */}
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--t-strong)', marginBottom: 10 }}>
+                সংরক্ষিত চরিত্র তালিকা ({savedCharacters.length})
+              </div>
+
+              {savedCharacters.length === 0 ? (
+                <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--t-muted)', fontSize: 12 }}>
+                  এখনও কোনো চরিত্র সেভ করা নেই। উপরের ফর্মে আপনার চরিত্র যোগ করুন।
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {savedCharacters.map(sc => (
+                    <div
+                      key={sc.id}
+                      style={{
+                        background: 'var(--surface)',
+                        border: '1px solid var(--line)',
+                        borderRadius: 9,
+                        padding: '10px 12px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                        <div style={{ width: 44, height: 44, borderRadius: 8, overflow: 'hidden', flexShrink: 0, background: 'var(--surface-hover)', border: '1px solid var(--line)' }}>
+                          {sc.avatar_url ? (
+                            <img
+                              src={sc.avatar_url.startsWith("http") ? sc.avatar_url : `${API_BASE}${sc.avatar_url}`}
+                              alt={sc.name}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                          ) : (
+                            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--t-muted)' }}>
+                              <User size={18} />
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <strong style={{ fontSize: 13, color: 'var(--t-strong)', display: 'block' }}>
+                            {sc.name}
+                          </strong>
+                          <span style={{ fontSize: 11, color: 'var(--t-muted)', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                            {sc.look || "No custom look provided"}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleSelectSavedCharacter(sc);
+                            setShowCharacterVaultModal(false);
+                          }}
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: 11, padding: '5px 10px' }}
+                        >
+                          <Plus size={12} /> ভিডিওতে ব্যবহার করুন
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSavedCharacter(sc.id, sc.name)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--a-red)',
+                            cursor: 'pointer',
+                            padding: 6,
+                            borderRadius: 6
+                          }}
+                          title="ভল্ট থেকে মুছে ফেলুন"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--line)', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowCharacterVaultModal(false)}
+              >
+                বন্ধ করুন (Close)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Voice API Key Modal (Gemini + ElevenLabs) */}
       {thumbStudioJob && (
