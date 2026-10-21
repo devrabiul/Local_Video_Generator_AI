@@ -453,6 +453,8 @@ export default function App() {
   const [chatPersona, setChatPersona] = useState<string>("film_director");
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const chatBottomRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // System & Backend Data
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
@@ -580,12 +582,12 @@ export default function App() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  // Auto-scroll chat to bottom
+  // Auto-scroll chat internally (never scrolling the window/body)
   useEffect(() => {
-    if (activeTab === "chat") {
-      chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (activeTab === "chat" && chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
-  }, [chatMessages, isChatLoading, activeTab]);
+  }, [chatMessages, isChatLoading]);
 
   // Send Chat message
   const handleSendChatMessage = async (textOverride?: string) => {
@@ -601,6 +603,9 @@ export default function App() {
     const updatedMessages = [...chatMessages, userMsg];
     setChatMessages(updatedMessages);
     setChatInput("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
     setIsChatLoading(true);
 
     try {
@@ -634,6 +639,14 @@ export default function App() {
     }
   };
 
+  const handleChatInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setChatInput(e.target.value);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 140)}px`;
+    }
+  };
+
   const copyMessage = (id: string, text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedMsgId(id);
@@ -649,6 +662,9 @@ export default function App() {
         setSystemStatus(data);
         if (data.models.length > 0 && !data.models.includes(ollamaModel)) {
           setOllamaModel(data.default_model || data.models[0]);
+        }
+        if (data.models.length > 0 && !data.models.includes(chatModel)) {
+          setChatModel(data.default_model || data.models[0]);
         }
       }
     } catch {
@@ -2792,7 +2808,7 @@ Visual: An iron axe splashing into deep river water, dramatic camera.`}
             </div>
 
             {/* Scrollable Messages Area */}
-            <div className="chat-scroll-area">
+            <div className="chat-scroll-area" ref={chatScrollRef}>
               <div className="chat-thread">
                 {chatMessages.map(msg => (
                   <div key={msg.id} className={`chat-msg-row ${msg.role}`}>
@@ -2880,9 +2896,10 @@ Visual: An iron axe splashing into deep river water, dramatic camera.`}
                 }}
               >
                 <textarea
+                  ref={textareaRef}
                   rows={1}
                   value={chatInput}
-                  onChange={e => setChatInput(e.target.value)}
+                  onChange={handleChatInputChange}
                   onKeyDown={e => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
