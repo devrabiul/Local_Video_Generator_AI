@@ -9,6 +9,7 @@ from loguru import logger
 from database import get_next_queued_job, get_job, update_job_status, clear_refine_instruction
 import ai_engine
 import music_library
+import narration
 import projects
 import tts_engine
 
@@ -51,6 +52,10 @@ async def process_job(job: dict):
         target_duration = int(job.get("target_duration") or 60)
         motion_mode = job.get("motion_mode") or "kenburns"
         aspect = job["aspect_ratio"]
+        resolution = int(job.get("resolution") or 1080)
+        resolution = resolution if resolution in ai_engine.RESOLUTIONS else 1080
+        fps = int(job.get("fps") or ai_engine.VIDEO_FPS)
+        fps = fps if fps in ai_engine.FPS_OPTIONS else ai_engine.VIDEO_FPS
         music_file = music_library.resolve_track(job.get("music_track") or "")
         if job.get("music_track") and not music_file:
             logger.warning(f"Background music '{job['music_track']}' not found; continuing without music")
@@ -93,52 +98,106 @@ async def process_job(job: dict):
         # Step 2: Voiceover generation (Gemini / ElevenLabs / F5-TTS)
         voice_label = job.get("voice", "neural")
         update_job_status(job_id, status="VOICEOVER", progress=30, current_step=f"Generating voiceover using {voice_label}...")
-        scene_audios = []
-        scene_durations = []
-        stitch_ids: list[str] = []  # ElevenLabs request stitching keeps the delivery continuous
-        for i, sc in enumerate(scenes):
-            _checkpoint(job_id)
+        engine, voice_name = tts_engine.split_voice(job["voice"])
+
+        def _pause(i: int, sc: dict) -> float:
             # Breathing room between scenes; the scene clip follows the padded audio length
             try:
                 pause = float(sc.get("pause_after", 0.6))
             except (TypeError, ValueError):
                 pause = 0.6
             pause = min(max(pause, 0.2), 2.0)
-            if i == len(scenes) - 1:
-                pause = max(pause, 1.0)
+            return max(pause, 1.0) if i == len(scenes) - 1 else pause
 
-            key = _asset_key(sc["narration"], sc.get("delivery", ""), narrator_style, job["voice"], job["language"], round(pause, 2))
-            audio_path = work_dir / f"audio_{key}.mp3"
-            progress = 30 + int((i / len(scenes)) * 14)
-            if audio_path.exists():
-                update_job_status(job_id, status="VOICEOVER", progress=progress, current_step=f"Reusing voiceover for scene {i+1}/{len(scenes)}...")
-            else:
-                update_job_status(job_id, status="VOICEOVER", progress=progress, current_step=f"Voicing scene {i+1}/{len(scenes)}...")
-                tmp = work_dir / f"tmp_{audio_path.name}"
+        # Continuous engines voice the story in one performance, so every scene's audio depends on the whole script
+        continuous = engine in tts_engine.CONTINUOUS_ENGINES
+        story_key = _asset_key([sc["narration"] for sc in scenes], narrator_style, job["voice"], job["language"]) if continuous else ""
+        audio_paths = []
+        for i, sc in enumerate(scenes):
+            parts = [sc["narration"], sc.get("delivery", ""), narrator_style, job["voice"], job["language"], round(_pause(i, sc), 2)]
+            if engine in tts_engine.BATCH_ENGINES:
+                parts.append(tts_engine.get_local_tts_model())  # switching the local model re-voices the story
+            key = _asset_key(*parts, story_key) if continuous else _asset_key(*parts)
+            audio_paths.append(work_dir / f"audio_{key}.mp3")
 
-                async def _on_voice_status(msg: str):
-                    _checkpoint(job_id)
-                    update_job_status(job_id, status="VOICEOVER", progress=progress, current_step=msg)
+        async def _on_voice_status(msg: str, progress: int = 32):
+            _checkpoint(job_id)
+            update_job_status(job_id, status="VOICEOVER", progress=progress, current_step=msg)
 
-                await tts_engine.generate_voiceover(
-                    sc["narration"],
-                    job["voice"],
-                    tmp,
-                    delivery=sc.get("delivery", ""),
-                    narrator_style=narrator_style,
-                    previous_text=scenes[i - 1]["narration"] if i > 0 else "",
-                    next_text=scenes[i + 1]["narration"] if i + 1 < len(scenes) else "",
-                    stitch_ids=stitch_ids,
-                    language=job["language"],
-                    on_status=_on_voice_status
+        async def _finish_scene_audio(i: int, raw: Path):
+            await asyncio.to_thread(ai_engine.pad_audio_with_silence, raw, _pause(i, scenes[i]))
+            await asyncio.to_thread(ai_engine.snap_audio_to_frames, raw, fps)
+            await asyncio.to_thread(tts_engine.encode_scene_audio, raw, audio_paths[i])
+            raw.unlink(missing_ok=True)
+
+        missing = [i for i, p in enumerate(audio_paths) if not p.exists()]
+        voice_separately = missing
+        if continuous and missing:
+            # Re-voice the whole story so the performance stays continuous, even if only one scene changed
+            voice_separately = []
+            texts = [sc["narration"] for sc in scenes]
+            takes = narration.group_into_takes(texts)
+            for t, idxs in enumerate(takes):
+                _checkpoint(job_id)
+                progress = 30 + int((t / len(takes)) * 14)
+                label = f"take {t + 1}/{len(takes)}" if len(takes) > 1 else "one continuous take"
+                await _on_voice_status(f"Voicing the story as {label} (scenes {idxs[0] + 1}-{idxs[-1] + 1})...", progress)
+                take_path = work_dir / f"tmp_take_{story_key}_{t}.wav"
+                raws = [work_dir / f"tmp_scene_{story_key}_{i}.wav" for i in idxs]
+                await tts_engine.generate_story_take(
+                    [texts[i] for i in idxs], job["voice"], take_path,
+                    narrator_style=narrator_style, deliveries=[scenes[i].get("delivery", "") for i in idxs],
+                    on_status=lambda m: _on_voice_status(m, progress),
                 )
-                await asyncio.to_thread(ai_engine.pad_audio_with_silence, tmp, pause)
-                os.replace(tmp, audio_path)
-            duration = await asyncio.to_thread(ai_engine.get_audio_duration, audio_path)
+                ok = await asyncio.to_thread(narration.split_take, take_path, [texts[i] for i in idxs], raws)
+                take_path.unlink(missing_ok=True)
+                if ok:
+                    for i, raw in zip(idxs, raws):
+                        await _finish_scene_audio(i, raw)
+                else:
+                    voice_separately += idxs
+
+        if engine in tts_engine.BATCH_ENGINES and voice_separately:
+            # Local cloning: one model load, one reference, one seed for every scene → one consistent voice
+            raws = [work_dir / f"tmp_scene_{audio_paths[i].stem}.wav" for i in voice_separately]
+            await _on_voice_status(f"Voicing {len(raws)} scenes with {tts_engine.LOCAL_TTS_MODELS[tts_engine.get_local_tts_model()]['label']}...", 31)
+            await tts_engine.generate_local_batch(
+                [scenes[i]["narration"] for i in voice_separately], voice_name, raws,
+                language=job["language"], on_status=lambda m: _on_voice_status(m, 38),
+            )
+            for i, raw in zip(voice_separately, raws):
+                await _finish_scene_audio(i, raw)
+            voice_separately = []
+
+        stitch_ids: list[str] = []  # ElevenLabs request stitching keeps the delivery continuous
+        for i in voice_separately:
+            _checkpoint(job_id)
+            progress = 30 + int((i / len(scenes)) * 14)
+            await _on_voice_status(f"Voicing scene {i+1}/{len(scenes)}...", progress)
+            sc = scenes[i]
+            raw = work_dir / f"tmp_scene_{audio_paths[i].stem}.wav"
+            await tts_engine.generate_voiceover(
+                sc["narration"],
+                job["voice"],
+                raw,
+                delivery=sc.get("delivery", ""),
+                narrator_style=narrator_style,
+                previous_text=scenes[i - 1]["narration"] if i > 0 else "",
+                next_text=scenes[i + 1]["narration"] if i + 1 < len(scenes) else "",
+                stitch_ids=stitch_ids,
+                language=job["language"],
+                on_status=lambda m: _on_voice_status(m, progress)
+            )
+            await _finish_scene_audio(i, raw)
+
+        scene_audios = audio_paths
+        scene_durations = []
+        for i, (sc, audio_path) in enumerate(zip(scenes, audio_paths)):
+            # Also snaps audio cached by older renders to the video frame grid (no-op when already snapped)
+            duration = await asyncio.to_thread(ai_engine.snap_audio_to_frames, audio_path, fps)
             sc["duration"] = duration
-            scene_audios.append(audio_path)
             scene_durations.append(duration)
-            logger.info(f"Scene {i+1} audio duration: {duration:.2f}s")
+            logger.info(f"Scene {i+1} audio duration: {duration:.3f}s")
 
         update_job_status(job_id, status="VOICEOVER", progress=45, current_step="Voiceover complete. Starting AI image generation...", scenes_json=json.dumps(scenes, ensure_ascii=False))
 
@@ -147,14 +206,15 @@ async def process_job(job: dict):
         scene_images = []
         for i, sc in enumerate(scenes):
             _checkpoint(job_id)
-            img_path = work_dir / f"image_{_asset_key(sc['visual_prompt'], aspect)}.png"
+            image_prompt = ai_engine.compose_image_prompt(sc)
+            img_path = work_dir / f"image_{_asset_key(image_prompt, aspect, job_id)}.png"
             progress = 50 + int((i / len(scenes)) * 20)
             if img_path.exists():
                 update_job_status(job_id, status="GENERATING_IMAGES", progress=progress, current_step=f"Reusing image {i+1}/{len(scenes)}...")
             else:
                 update_job_status(job_id, status="GENERATING_IMAGES", progress=progress, current_step=f"Generating image {i+1}/{len(scenes)}...")
                 tmp = work_dir / f"tmp_{img_path.name}"
-                await ai_engine.generate_scene_image(sc["visual_prompt"], aspect, tmp, project_id=job_id)
+                await ai_engine.generate_scene_image(image_prompt, aspect, tmp, project_id=job_id)
                 os.replace(tmp, img_path)
             sc["image"] = str(img_path)
             sc["image_url"] = projects.work_url(job_id, img_path.name)
@@ -167,8 +227,9 @@ async def process_job(job: dict):
         for i, (img_path, dur, sc) in enumerate(zip(scene_images, scene_durations, scenes)):
             _checkpoint(job_id)
             motion_desc = sc.get("motion_prompt", "cinematic camera movement")
-            key = _asset_key(img_path.name, round(dur, 3), aspect, motion_mode,
-                             ai_engine.scene_motion_type(i, motion_mode), motion_desc if motion_mode == "wan" else "")
+            key = _asset_key(img_path.name, round(dur, 3), aspect, motion_mode, fps, resolution,
+                             ai_engine.scene_motion_type(i, motion_mode),
+                             (motion_desc, ai_engine.WAN_QUALITY, ai_engine.pick_wan_model()) if motion_mode == "wan" else "")
             vid_path = work_dir / f"clip_{key}.mp4"
             progress = 72 + int((i / len(scenes)) * 20)
             if vid_path.exists():
@@ -185,7 +246,9 @@ async def process_job(job: dict):
                     output_path=tmp,
                     fallback_idx=i,
                     motion_mode=motion_mode,
-                    project_id=job_id
+                    project_id=job_id,
+                    resolution=resolution,
+                    fps=fps,
                 )
                 os.replace(tmp, vid_path)
             scene_videos.append(vid_path)
@@ -220,6 +283,9 @@ async def process_job(job: dict):
             music_ducking=bool(job.get("music_ducking", 1)),
             enable_subtitles=enable_subtitles,
             subtitles_file=ass_path if enable_subtitles else None,
+            music_levels=[sc.get("music_level", "medium") for sc in scenes],
+            resolution=resolution,
+            fps=fps,
         )
 
         latest = get_job(job_id)

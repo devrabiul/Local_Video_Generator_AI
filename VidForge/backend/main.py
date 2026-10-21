@@ -64,11 +64,14 @@ class CreateJobRequest(BaseModel):
     voice_volume: int = Field(100, ge=50, le=150)
     music_ducking: bool = True
     enable_subtitles: bool = True
+    resolution: Literal[480, 720, 1080, 1440] = 1080  # height of the short side
+    fps: Literal[24, 25, 30, 60] = 30
 
 class TTSConfigRequest(BaseModel):
     elevenlabs_api_key: str | None = None
     gemini_api_key: str | None = None
     default_engine: str | None = None
+    local_tts_model: str | None = None
 
 class TestKeyRequest(BaseModel):
     api_key: str
@@ -164,7 +167,9 @@ def get_tts_config_api():
         "masked_key": _mask(eleven_key),
         "has_gemini_key": bool(gemini_key),
         "gemini_masked_key": _mask(gemini_key),
-        "default_engine": cfg["default_engine"]
+        "default_engine": cfg["default_engine"],
+        "local_tts_model": tts_engine.get_local_tts_model(),
+        "local_tts_models": tts_engine.LOCAL_TTS_MODELS,
     }
 
 @app.post("/api/tts/config")
@@ -178,6 +183,10 @@ def set_tts_config_api(req: TTSConfigRequest):
         if req.default_engine not in tts_engine.ENGINES:
             raise HTTPException(status_code=400, detail="Unknown TTS engine")
         update_data["default_engine"] = req.default_engine
+    if req.local_tts_model is not None:
+        if req.local_tts_model not in tts_engine.LOCAL_TTS_MODELS:
+            raise HTTPException(status_code=400, detail="Unknown local voice model")
+        update_data["local_tts_model"] = req.local_tts_model
     saved = tts_engine.save_tts_config(update_data)
     return {
         "ok": True,
@@ -348,7 +357,9 @@ def create_job(req: CreateJobRequest):
         music_volume=req.music_volume,
         voice_volume=req.voice_volume,
         music_ducking=req.music_ducking,
-        enable_subtitles=req.enable_subtitles
+        enable_subtitles=req.enable_subtitles,
+        resolution=req.resolution,
+        fps=req.fps
     )
     return {"id": job_id, "status": "QUEUED"}
 

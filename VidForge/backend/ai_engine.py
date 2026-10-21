@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import random
@@ -90,18 +91,34 @@ def get_video_encoder() -> str:
     logger.info(f"Using video encoder: {_video_encoder}")
     return _video_encoder
 
-def video_encoder_args(quality: int) -> list[str]:
-    """Encoder flags at a comparable quality level (lower = better, CRF-style)."""
+def video_encoder_args(quality: int, size: tuple[int, int] = (1080, 1920), fps: int = 30) -> list[str]:
+    """Encoder flags at a comparable quality level (lower = better, CRF-style).
+
+    VideoToolbox has no CRF mode, so its bitrate scales with pixels per second
+    (12 Mbps at 1080p30, ~43 Mbps at 1440p60, never below 4 Mbps).
+    """
     enc = get_video_encoder()
     if enc == "h264_nvenc":
         return ["-c:v", enc, "-preset", "p5", "-cq", str(quality)]
     if enc == "h264_videotoolbox":
-        return ["-c:v", enc, "-b:v", "12M"]
+        mbps = max(4, round(12 * (size[0] * size[1] * fps) / (1080 * 1920 * 30)))
+        return ["-c:v", enc, "-b:v", f"{mbps}M"]
     if enc == "libx264":
         return ["-c:v", enc, "-preset", "medium", "-crf", str(quality)]
     return ["-c:v", enc]
 
 WORKFLOWS_DIR = BASE_DIR / "workflows"
+
+# Output resolutions (the short side) and frame rates offered in the UI
+RESOLUTIONS = (480, 720, 1080, 1440)
+FPS_OPTIONS = (24, 25, 30, 60)
+
+
+def render_size(aspect: str, resolution: int = 1080) -> tuple[int, int]:
+    """(width, height) of the final video: 9:16 → 1080x1920, 16:9 → 1920x1080, etc. Always even."""
+    short = resolution if resolution in RESOLUTIONS else 1080
+    long = int(round(short * 16 / 9 / 2)) * 2  # 480 → 854, 720 → 1280, 1080 → 1920, 1440 → 2560
+    return (short, long) if aspect == "9:16" else (long, short)
 
 ASPECT_RESOLUTIONS = {
     "9:16": {"width": 768, "height": 1344, "render_w": 1080, "render_h": 1920, "wan_w": 480, "wan_h": 832},
@@ -282,53 +299,125 @@ async def generate_story_script(
     final_scene_count = scene_count if (scene_count and scene_count > 0) else computed_scenes
     
     system_prompt = f"""{cfg['persona']}
-Generate a complete, professional, highly engaging video production script with EXACTLY {final_scene_count} chronological scenes based on the user's prompt.
+Write ONE complete, continuous video story with EXACTLY {final_scene_count} chronological scenes, based on the user's prompt.
 Production Format: {cfg['name']}
 Target Total Video Duration: Approximately {target_duration} seconds (~{target_duration // 60}m {target_duration % 60}s).
 
-Strict Timing & High-Retention Pacing Rules:
-- You MUST generate EXACTLY {final_scene_count} chronological scenes.
-- Visual Pacing: Each scene MUST cut/transition quickly (every ~4 to 6 seconds) to maintain viewer retention and avoid boredom.
-- Narration Length: Each scene's spoken voiceover contains approximately {words_per_scene} words (1-3 short, natural sentences in {target_lang}).
-- Total Spoken Words: The total narration across all {final_scene_count} scenes MUST be approximately {words_target} words so the spoken voiceover matches ~{target_duration}s.
+STORY CONTINUITY (most important — the video must feel like one film, not separate clips):
+- Plan the whole story first: a hook, rising tension, a climax, and a resolution. Every scene is the direct result of the scene before it.
+- Each scene's narration picks up exactly where the previous scene ended (cause → effect, "then", "but", "meanwhile", "at that moment"). Never restart, never summarise, never repeat information.
+- Keep the same main characters, with the same names and roles, from start to finish. Introduce each character once.
+- Keep one narrator voice and point of view, and one tense, for the whole story.
 
-Voice Emotion & Dramatic Performance Rules (CRITICAL FOR VOICE ACTING):
-- Voice Acting Delivery: The narration is performed by an expressive AI voice actor. Every scene MUST have an emotional tone that matches its story moment.
-- Follow a Dynamic Emotional Arc across the video:
-  * Opening scene: Intriguing, mysterious or captivating hook (e.g. "mysterious, hushed suspense" or "curious, gentle wonder").
-  * Middle scene(s): Deepening emotion, conflict or intensity (e.g. "heartbreaking, solemn with voice trembling", "urgent, speaking rapidly", "intense, rising tension").
-  * Climax scene: Peak dramatic intensity (e.g. "commanding, fierce battle cry", "triumphant, loud and breathless awe").
-  * Ending scene: Poignant reflection or inspiring resolution (e.g. "reverent, slow emotional resonance", "warm, deeply inspiring").
+STORY BIBLE (keeps every image consistent):
+- "characters": every recurring on-screen character, with a FIXED English "look": age, gender, skin tone, face, hair, build, and exact clothing with colours and accessories. The same look is reused in every scene, so be specific and never change it.
+- "setting": era, place and recurring locations.
+- "visual_style": ONE art direction for the whole video (lighting, colour palette, lens, mood). Visual Guidelines: {cfg['visual_guidelines']}
+
+PACING:
+- EXACTLY {final_scene_count} scenes, each ~4-6 seconds on screen.
+- Each scene's narration is ~{words_per_scene} words (1-3 short, natural sentences in {target_lang}); ~{words_target} words in total.
+
+VOICE PERFORMANCE:
+- One consistent narrator persona for the whole story; only the intensity changes with the emotional arc (hook → deepening → climax → reflective ending).
 - Use natural punctuation for rhythm: commas, "…" for a lingering pause, "—" for a sudden break.
-- You MAY insert performance cues inside the narration, written in English square brackets, ONLY from this list: {', '.join(PERFORMANCE_CUES)}. Use 0-2 cues per scene, placed where a real narrator would pause or express emotion. Never put any other words in square brackets.
+- You MAY insert performance cues in English square brackets, ONLY from: {', '.join(PERFORMANCE_CUES)}. 0-2 per scene. Never put other words in square brackets.
 
-Requirements for each scene:
-1. "narration": Spoken voiceover STRICTLY in {target_lang} (~{words_per_scene} words, cues not counted).
-   Format Guidelines: {cfg['narration_guidelines']}
-2. "delivery": 2-6 vivid English words specifying the EXACT voice emotion, volume, and pace for this scene (e.g. "whispered urgently", "grief-stricken, voice trembling", "fierce, resolute and booming", "soft, tender, nostalgic"). DO NOT use generic or flat descriptions!
-3. "pause_after": Seconds of silence after this scene: 0.3 for quick flow, 0.6 normally, 1.0-1.5 before a dramatic turn and after the final scene.
-4. "visual_prompt": A unique, distinct visual description written in English for 8K photorealistic image generation (ComfyUI Z-Image-Turbo). Vary camera angles, subjects, macro details, and perspectives between scenes!
-   Visual Guidelines: {cfg['visual_guidelines']}
-5. "motion_prompt": Vivid description in English for AI video animation & camera movement (e.g. "gentle cinematic push in, character blinking and smiling warmly, soft hair movement in breeze", "slow pan right across magical landscape, floating embers in air", "dynamic cinematic zoom in on character's expressive face").
+Fields for each scene:
+1. "narration": spoken voiceover STRICTLY in {target_lang} (~{words_per_scene} words, cues not counted). {cfg['narration_guidelines']}
+2. "delivery": 2-6 vivid English words for this scene's emotion, volume and pace (e.g. "hushed, slow suspense", "grief-stricken, voice trembling", "fierce and booming").
+3. "pause_after": seconds of silence after this scene: 0.3 quick flow, 0.6 normal, 1.0-1.5 before a dramatic turn and after the final scene.
+4. "characters": names (from the story bible) visible in this scene; [] if none.
+5. "location": where this scene happens, in English (reuse the same wording when the place repeats).
+6. "action": one English sentence — what visibly happens in this scene.
+7. "continuity": one English sentence — how this scene follows from the previous one ("opening" for scene 1).
+8. "visual_prompt": English, for photorealistic image generation — composition, camera angle, framing, the action, expressions, lighting. Refer to characters by name; their fixed look is added automatically. Vary shots (wide, medium, close-up) but keep the same world.
+9. "motion_prompt": English, for image-to-video AI. Use SUBTLE, physically plausible motion only: breathing, blinking, a slow head turn, hair or cloth moving in wind, smoke, flickering fire, drifting dust, water ripples — plus ONE slow camera move (slow push in, slow pan, gentle dolly). Avoid running, fighting, fast gestures, crowds in motion, close-up hands, transformations and spinning cameras: they cause distortion.
+10. "music_level": background-music intensity for this moment: "low" (intimate, sad, tense whisper, revelations), "medium" (normal storytelling) or "high" (action, triumph, climax).
 
 Respond ONLY with valid JSON in this exact structure:
 {{
   "title": "Clear Gripping Title",
-  "synopsis": "1-2 sentence overview of the video content",
-  "narrator_style": "3-8 English words describing the narrator's overall voice persona (e.g. warm, intimate documentary storyteller)",
+  "synopsis": "1-2 sentence overview",
+  "narrator_style": "3-8 English words describing the narrator's single voice persona (e.g. warm, intimate documentary storyteller)",
+  "story_bible": {{
+    "characters": [{{"name": "Name", "look": "Fixed English visual description"}}],
+    "setting": "Era, place, recurring locations",
+    "visual_style": "One consistent art direction"
+  }},
   "scenes": [
     {{
       "id": 1,
-      "narration": "Voiceover in {target_lang} (~{words_per_scene} words), optionally with cues like [short pause]",
+      "narration": "Voiceover in {target_lang}",
       "delivery": "How to speak it, in English",
       "pause_after": 0.6,
-      "visual_prompt": "Visual description in English",
-      "motion_prompt": "Camera motion in English"
+      "characters": ["Name"],
+      "location": "Where",
+      "action": "What happens",
+      "continuity": "How it follows the previous scene",
+      "visual_prompt": "Image description in English",
+      "motion_prompt": "Subtle motion and one slow camera move, in English",
+      "music_level": "medium"
     }}
   ]
 }}"""
 
-    return await ollama_json(system_prompt, f"Topic / Concept:\n{topic}", model=model, task="script generation")
+    plan = await ollama_json(system_prompt, f"Topic / Concept:\n{topic}", model=model, task="script generation")
+    return normalize_plan(plan)
+
+
+MUSIC_LEVELS = ("low", "medium", "high")
+
+
+def normalize_plan(plan: dict) -> dict:
+    """Validates the planner's JSON and copies the story bible into every scene.
+
+    Scenes are the only thing persisted with a project (and edited in Story Studio), so each
+    scene carries the fixed looks of its characters and the shared style; that keeps images
+    consistent even after scenes are edited, reordered or refined.
+    """
+    bible = plan.get("story_bible") if isinstance(plan.get("story_bible"), dict) else {}
+    looks = {}
+    for ch in bible.get("characters") or []:
+        if isinstance(ch, dict) and str(ch.get("name", "")).strip() and str(ch.get("look", "")).strip():
+            looks[str(ch["name"]).strip()] = str(ch["look"]).strip()
+    style = str(bible.get("visual_style", "")).strip()
+    setting = str(bible.get("setting", "")).strip()
+
+    scenes = []
+    for sc in plan.get("scenes") or []:
+        if not isinstance(sc, dict) or not str(sc.get("narration", "")).strip():
+            continue
+        names = [str(n).strip() for n in (sc.get("characters") or []) if isinstance(n, str)]
+        sc["cast"] = [{"name": n, "look": looks[n]} for n in names if n in looks]
+        sc["style"] = style
+        sc["setting"] = setting
+        level = str(sc.get("music_level", "medium")).strip().lower()
+        sc["music_level"] = level if level in MUSIC_LEVELS else "medium"
+        sc["id"] = len(scenes) + 1
+        scenes.append(sc)
+    plan["scenes"] = scenes
+    plan["story_bible"] = {"characters": [{"name": n, "look": l} for n, l in looks.items()], "setting": setting, "visual_style": style}
+    return plan
+
+
+def compose_image_prompt(scene: dict) -> str:
+    """Scene prompt + the fixed looks of the characters in it + the shared setting and style."""
+    parts = [str(scene.get("visual_prompt", "")).strip().rstrip(".")]
+    for member in scene.get("cast") or []:
+        parts.append(f"{member['name']}: {member['look']}")
+    if scene.get("location"):
+        parts.append(f"Location: {scene['location']}")
+    if scene.get("setting"):
+        parts.append(f"Setting: {scene['setting']}")
+    if scene.get("style"):
+        parts.append(f"Style: {scene['style']}")
+    return ". ".join(p for p in parts if p) + "."
+
+
+def project_seed(project_id: str) -> int:
+    """One seed per project, so every scene is rendered with the same noise and looks related."""
+    return int(hashlib.sha1((project_id or "vidforge").encode()).hexdigest()[:8], 16) % (2**31 - 1) + 1
 
 async def ollama_json(system_prompt: str, user_content: str, model: str | None = None, task: str = "generation") -> dict:
     """Runs a JSON-mode Ollama chat, falling back through installed models, and frees VRAM afterwards."""
@@ -422,7 +511,10 @@ async def plan_script(prompt: str, language: str, video_type: str = "story", tar
 async def plan_story(prompt: str, language: str, model: str = None) -> dict:
     return await plan_script(prompt, language, video_type="story", target_duration=60, model=model)
 
-SCENE_FIELDS = ("narration", "delivery", "pause_after", "visual_prompt", "motion_prompt")
+SCENE_FIELDS = ("narration", "delivery", "pause_after", "characters", "location", "action", "continuity",
+                "visual_prompt", "motion_prompt", "music_level")
+# Copied from the original script into revised scenes; the planner fills them from the story bible
+BIBLE_FIELDS = ("cast", "style", "setting")
 
 async def refine_script(title: str, scenes: list[dict], instruction: str, language: str, video_type: str = "story") -> list[dict]:
     """Revises an existing storyboard according to a user instruction.
@@ -441,7 +533,9 @@ Rules:
 - Any scene the instruction does not affect MUST be copied back EXACTLY, character for character, so it does not need to be re-rendered.
 - "narration" stays STRICTLY in {target_lang}. "delivery", "visual_prompt" and "motion_prompt" stay in English.
 - Performance cues inside narration may only come from: {', '.join(PERFORMANCE_CUES)}.
-- Each scene keeps the fields: narration, delivery, pause_after, visual_prompt, motion_prompt.
+- Each scene keeps the fields: narration, delivery, pause_after, characters, location, action, continuity, visual_prompt, motion_prompt, music_level.
+- Keep the story continuous: every scene still follows from the one before it, with the same characters and names.
+- motion_prompt stays subtle and physically plausible with one slow camera move; music_level is "low", "medium" or "high".
 
 Respond ONLY with valid JSON: {{"scenes": [ ...every scene of the revised script, in order... ]}}"""
     user_content = (
@@ -456,6 +550,16 @@ Respond ONLY with valid JSON: {{"scenes": [ ...every scene of the revised script
         clean = {k: sc[k] for k in SCENE_FIELDS if k in sc}
         clean["id"] = i + 1
         revised.append(clean)
+    # Re-attach the fixed character looks and shared style from the original script
+    looks = {m["name"]: m["look"] for sc in scenes for m in (sc.get("cast") or []) if m.get("name") and m.get("look")}
+    shared = next((sc for sc in scenes if sc.get("style") or sc.get("setting")), {})
+    for sc in revised:
+        names = [n for n in (sc.get("characters") or []) if isinstance(n, str)]
+        sc["cast"] = [{"name": n, "look": looks[n]} for n in names if n in looks]
+        sc["style"] = shared.get("style", "")
+        sc["setting"] = shared.get("setting", "")
+        if sc.get("music_level") not in MUSIC_LEVELS:
+            sc["music_level"] = "medium"
     if not revised:
         raise ValueError("The AI did not return a usable revised script")
     return revised
@@ -520,7 +624,7 @@ async def generate_scene_image(visual_prompt: str, aspect: str, output_path: Pat
             node["inputs"]["width"] = dims["width"]
             node["inputs"]["height"] = dims["height"]
         elif title == "VF_SAMPLER":
-            node["inputs"]["seed"] = random.randint(1, 2**31 - 1)
+            node["inputs"]["seed"] = project_seed(project_id) if project_id else random.randint(1, 2**31 - 1)
         elif title == "VF_SAVE" and project_id:
             node["inputs"]["filename_prefix"] = f"{comfy_subfolder(project_id)}/image"
 
@@ -553,135 +657,132 @@ async def generate_scene_image(visual_prompt: str, aspect: str, output_path: Pat
 
     raise TimeoutError("ComfyUI Image generation timed out")
 
-async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, raw_clip_path: Path, project_id: str = "") -> bool:
-    """Invokes Wan 2.1 I2V in ComfyUI to animate the character/scene"""
+# ---------------------------------------------------------------------------
+# Wan 2.1 image-to-video
+# ---------------------------------------------------------------------------
+# Every scene clip is rendered at this frame rate with an exact frame count, and each scene's
+# audio is snapped to the same frame grid, so picture and narration never drift apart.
+VIDEO_FPS = 30
+WAN_FPS = 16  # Wan 2.1 is trained at 16 fps (wan/configs/shared_config.py: sample_fps)
+
+# Checkpoints in preference order. All run at 832x480, the size VidForge renders Wan at.
+# The 480p GGUF quantisations (city96/Wan2.1-I2V-14B-480P-gguf) fit in 16 GB of VRAM; the FP8
+# checkpoints are 16.4 GB and make ComfyUI offload part of the model to system RAM.
+WAN_MODEL_CANDIDATES = (
+    "wan2.1-i2v-14b-480p-Q5_K_M.gguf",
+    "wan2.1-i2v-14b-480p-Q4_K_M.gguf",
+    "wan2.1_i2v_480p_14B_fp8_e4m3fn.safetensors",
+    "wan2.1_i2v_720p_14B_fp8_e4m3fn.safetensors",
+)
+WAN_UNET = _setting("wan_unet", "VIDFORGE_WAN_UNET", "")
+WAN_QUALITY = _setting("wan_quality", "VIDFORGE_WAN_QUALITY", "balanced")
+# Official I2V defaults (Wan2.1 generate.py): 40 steps, guide scale 5.0, shift 3.0 at 832x480, 81 frames.
+WAN_PRESETS = {
+    "fast": {"max_frames": 33, "steps": 20},
+    "balanced": {"max_frames": 49, "steps": 30},
+    "quality": {"max_frames": 81, "steps": 40},
+}
+WAN_SHIFT_480P = 3.0
+WAN_CFG = 5.0
+# Official negative prompt (wan/configs/shared_config.py) plus an English summary of the same artifacts
+WAN_NEGATIVE_PROMPT = (
+    "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，"
+    "丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，"
+    "杂乱的背景，三条腿，背景人很多，倒着走, "
+    "deformed face, morphing, warped background, extra limbs, flickering, text, watermark"
+)
+
+
+def pick_wan_model() -> str:
+    """The configured Wan checkpoint, else the best one installed in ComfyUI."""
+    if WAN_UNET:
+        return WAN_UNET
+    for name in WAN_MODEL_CANDIDATES:
+        for folder in ("diffusion_models", "unet"):
+            if (COMFYUI_DIR / "models" / folder / name).exists():
+                return name
+    return WAN_MODEL_CANDIDATES[-1]
+
+
+def wan_frame_count(duration: float, max_frames: int) -> int:
+    """Frames to generate for a scene: covers the scene where possible, 4n+1 as Wan requires."""
+    wanted = int(duration * WAN_FPS) + 1
+    frames = min(max_frames, max(17, wanted))
+    return ((frames - 1) // 4) * 4 + 1
+
+
+async def comfy_vram() -> tuple[float, float] | None:
+    """(used_gb, total_gb) of ComfyUI's GPU, or None if it can't be read."""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            dev = (await client.get(f"{COMFYUI_URL}/system_stats")).json()["devices"][0]
+        total = dev["vram_total"] / 1024**3
+        return total - dev["vram_free"] / 1024**3, total
+    except Exception:
+        return None
+
+
+async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, raw_clip_path: Path,
+                            project_id: str = "", duration: float = 5.0) -> bool:
+    """Invokes Wan 2.1 I2V in ComfyUI to animate the scene image."""
     dims = ASPECT_RESOLUTIONS.get(aspect, ASPECT_RESOLUTIONS["9:16"])
-    
-    # 1. Place input image into ComfyUI input folder
+    preset = WAN_PRESETS.get(WAN_QUALITY, WAN_PRESETS["balanced"])
+    unet = pick_wan_model()
+    frames = wan_frame_count(duration, preset["max_frames"])
+
     COMFYUI_INPUT.mkdir(parents=True, exist_ok=True)
     input_filename = f"wan_in_{project_id}_{image_path.stem}.png" if project_id else f"wan_in_{image_path.stem}.png"
-    dest_input = COMFYUI_INPUT / input_filename
-    shutil.copy(image_path, dest_input)
-
+    shutil.copy(image_path, COMFYUI_INPUT / input_filename)
     prefix = f"wan_{image_path.stem}"
 
-    # Wan 2.1 I2V API workflow
+    loader = (
+        {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet}}  # ComfyUI-GGUF custom node
+        if unet.endswith(".gguf")
+        else {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}}
+    )
     wan_prompt = {
-        "37": {
-            "class_type": "UNETLoader",
-            "inputs": {
-                "unet_name": "wan2.1_i2v_720p_14B_fp8_e4m3fn.safetensors",
-                "weight_dtype": "default"
-            }
-        },
-        "38": {
-            "class_type": "CLIPLoader",
-            "inputs": {
-                "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-                "type": "wan",
-                "device": "default"
-            }
-        },
-        "39": {
-            "class_type": "VAELoader",
-            "inputs": {
-                "vae_name": "wan_2.1_vae.safetensors"
-            }
-        },
-        "49": {
-            "class_type": "CLIPVisionLoader",
-            "inputs": {
-                "clip_name": "clip_vision_h.safetensors"
-            }
-        },
-        "6": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {
-                "clip": ["38", 0],
-                "text": f"{motion_prompt}, cinematic high production quality, fluid natural movement, consistent character identity, dynamic studio lighting, highly detailed"
-            }
-        },
-        "7": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {
-                "clip": ["38", 0],
-                "text": "blurry, static, distorted, artifacts, low quality, jittery, disfigured, deformed, noisy, morphing, melted faces, extra limbs, bad anatomy, frame warping"
-            }
-        },
-        "54": {
-            "class_type": "ModelSamplingSD3",
-            "inputs": {
-                "model": ["37", 0],
-                "shift": 8.0
-            }
-        },
-        "52": {
-            "class_type": "LoadImage",
-            "inputs": {
-                "image": input_filename
-            }
-        },
-        "51": {
-            "class_type": "CLIPVisionEncode",
-            "inputs": {
-                "clip_vision": ["49", 0],
-                "image": ["52", 0],
-                "crop": "center"
-            }
-        },
-        "50": {
-            "class_type": "WanImageToVideo",
-            "inputs": {
-                "positive": ["6", 0],
-                "negative": ["7", 0],
-                "vae": ["39", 0],
-                "clip_vision_output": ["51", 0],
-                "start_image": ["52", 0],
-                "width": dims["wan_w"],
-                "height": dims["wan_h"],
-                "length": 33, # 33 frames (4n+1) at 16fps = 2.06s smooth base motion
-                "batch_size": 1
-            }
-        },
-        "3": {
-            "class_type": "KSampler",
-            "inputs": {
-                "model": ["54", 0],
-                "positive": ["50", 0],
-                "negative": ["50", 1],
-                "latent_image": ["50", 2],
-                "seed": random.randint(1, 2**31 - 1),
-                "steps": 20, # 20 steps with uni_pc gives sharp, artifact-free diffusion
-                "cfg": 5.0,
-                "sampler_name": "uni_pc",
-                "scheduler": "simple",
-                "denoise": 1.0
-            }
-        },
-        "8": {
-            "class_type": "VAEDecode",
-            "inputs": {
-                "samples": ["3", 0],
-                "vae": ["39", 0]
-            }
-        },
-        "55": {
-            "class_type": "CreateVideo",
-            "inputs": {
-                "images": ["8", 0],
-                "fps": 16.0
-            }
-        },
-        "56": {
-            "class_type": "SaveVideo",
-            "inputs": {
-                "video": ["55", 0],
-                "filename_prefix": f"{comfy_subfolder(project_id)}/{prefix}" if project_id else f"video/{prefix}",
-                "format": "auto",
-                "codec": "auto"
-            }
-        }
+        "37": loader,
+        "38": {"class_type": "CLIPLoader", "inputs": {"clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "type": "wan", "device": "default"}},
+        "39": {"class_type": "VAELoader", "inputs": {"vae_name": "wan_2.1_vae.safetensors"}},
+        "49": {"class_type": "CLIPVisionLoader", "inputs": {"clip_name": "clip_vision_h.safetensors"}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["38", 0], "text": (
+            f"{motion_prompt}. Subtle natural motion, stable camera, the same characters and background as the "
+            "first frame, consistent faces and anatomy, cinematic lighting, highly detailed"
+        )}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["38", 0], "text": WAN_NEGATIVE_PROMPT}},
+        "54": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["37", 0], "shift": WAN_SHIFT_480P}},
+        "52": {"class_type": "LoadImage", "inputs": {"image": input_filename}},
+        "51": {"class_type": "CLIPVisionEncode", "inputs": {"clip_vision": ["49", 0], "image": ["52", 0], "crop": "center"}},
+        "50": {"class_type": "WanImageToVideo", "inputs": {
+            "positive": ["6", 0], "negative": ["7", 0], "vae": ["39", 0], "clip_vision_output": ["51", 0],
+            "start_image": ["52", 0], "width": dims["wan_w"], "height": dims["wan_h"], "length": frames, "batch_size": 1,
+        }},
+        "3": {"class_type": "KSampler", "inputs": {
+            "model": ["54", 0], "positive": ["50", 0], "negative": ["50", 1], "latent_image": ["50", 2],
+            "seed": project_seed(project_id + image_path.stem), "steps": preset["steps"], "cfg": WAN_CFG,
+            "sampler_name": "uni_pc", "scheduler": "simple", "denoise": 1.0,
+        }},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["39", 0]}},
+        "55": {"class_type": "CreateVideo", "inputs": {"images": ["8", 0], "fps": float(WAN_FPS)}},
+        "56": {"class_type": "SaveVideo", "inputs": {
+            "video": ["55", 0],
+            "filename_prefix": f"{comfy_subfolder(project_id)}/{prefix}" if project_id else f"video/{prefix}",
+            "format": "auto", "codec": "auto",
+        }},
     }
+
+    vram = await comfy_vram()
+    logger.info(
+        f"Wan 2.1: {unet}, {frames} frames, {preset['steps']} steps ({WAN_QUALITY})"
+        + (f", GPU memory {vram[0]:.1f}/{vram[1]:.1f} GB in use" if vram else "")
+    )
+    # A 14B FP8 checkpoint (16.4 GB) does not fit in 16 GB of VRAM; ComfyUI then streams part of it
+    # from system RAM. That is slower but normal — it is not an error.
+    if vram and not unet.endswith(".gguf") and vram[1] < 20:
+        logger.warning(
+            f"Wan 2.1 FP8 checkpoint ({unet}) is larger than this GPU's {vram[1]:.0f} GB VRAM; ComfyUI will offload "
+            "part of it to system RAM. A 480p GGUF Q4_K_M/Q5_K_M checkpoint fits fully in VRAM and runs faster."
+        )
 
     try:
         async with httpx.AsyncClient(timeout=600.0) as client:
@@ -690,31 +791,27 @@ async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, r
             prompt_id = r.json()["prompt_id"]
 
             t0 = time.time()
-            while time.time() - t0 < 500:
-                hist_res = await client.get(f"{COMFYUI_URL}/history/{prompt_id}")
-                hist = hist_res.json()
+            # Generation time grows with frames x steps; allow up to 25 minutes per scene
+            while time.time() - t0 < 1500:
+                hist = (await client.get(f"{COMFYUI_URL}/history/{prompt_id}")).json()
                 if prompt_id in hist:
                     status = hist[prompt_id].get("status", {})
                     if status.get("status_str") == "error":
                         logger.warning(f"Wan 2.1 ComfyUI error: {status}")
                         return False
                     if status.get("completed"):
-                        outputs = hist[prompt_id].get("outputs", {})
-                        # Node 56 is SaveVideo
-                        save_node = outputs.get("56", {})
+                        save_node = hist[prompt_id].get("outputs", {}).get("56", {})
                         video_list = save_node.get("images", []) or save_node.get("videos", [])
                         if video_list:
                             vid_info = video_list[0]
-                            # Try downloading from view API
                             vid_resp = await client.get(
                                 f"{COMFYUI_URL}/view",
-                                params={"filename": vid_info["filename"], "subfolder": vid_info.get("subfolder", "video"), "type": "output"}
+                                params={"filename": vid_info["filename"], "subfolder": vid_info.get("subfolder", "video"), "type": "output"},
                             )
                             if vid_resp.status_code == 200:
                                 raw_clip_path.write_bytes(vid_resp.content)
-                                logger.info(f"Wan 2.1 video generated: {raw_clip_path}")
+                                logger.info(f"Wan 2.1 video generated in {time.time() - t0:.0f}s: {raw_clip_path}")
                                 return True
-                            # Or read directly from ComfyUI output
                             disk_file = COMFYUI_OUTPUT / vid_info.get("subfolder", "video") / vid_info["filename"]
                             if disk_file.exists():
                                 shutil.copy(disk_file, raw_clip_path)
@@ -726,50 +823,77 @@ async def animate_scene_wan(image_path: Path, motion_prompt: str, aspect: str, r
 
     return False
 
-def extend_video_to_duration(raw_video: Path, target_duration: float, aspect: str, final_video: Path):
-    """Seamlessly loops the AI motion clip using forward-reverse ping-pong so character motion never cuts abruptly"""
-    dims = ASPECT_RESOLUTIONS.get(aspect, ASPECT_RESOLUTIONS["9:16"])
-    rw, rh = dims["render_w"], dims["render_h"]
 
-    # Filter: ping-pong loop (forward + reverse) repeated to cover target_duration, scaled to output resolution
-    filter_str = (
-        f"[0:v]scale={rw}:{rh}:force_original_aspect_ratio=increase,crop={rw}:{rh},"
-        f"split=2[fwd][rev_in];"
-        f"[rev_in]reverse[rev];"
-        f"[fwd][rev]concat=n=2:v=1[pingpong];"
-        f"[pingpong]loop=loop=-1:size=200[vloop]"
+def frames_for(duration: float, fps: int = VIDEO_FPS) -> int:
+    return max(1, round(duration * fps))
+
+
+def fit_clip_to_duration(raw_video: Path, target_duration: float, aspect: str, final_video: Path,
+                         resolution: int = 1080, fps: int = VIDEO_FPS) -> Path:
+    """Fits an AI motion clip to the scene length without reversing it.
+
+    A clip that is a little short is slowed down (up to 1.3x); anything left over holds the last
+    frame. The result is exactly frames_for(target_duration, fps) frames.
+    """
+    rw, rh = render_size(aspect, resolution)
+    clip_len = max(0.1, get_audio_duration(raw_video))  # ffprobe format duration works for video too
+    stretch = min(1.3, max(1.0, target_duration / clip_len))
+    fade_d = min(0.3, target_duration / 4)
+    vf = (
+        f"setpts={stretch:.4f}*PTS,fps={fps},"
+        f"scale={rw}:{rh}:force_original_aspect_ratio=increase:flags=lanczos,crop={rw}:{rh},"
+        f"tpad=stop_mode=clone:stop_duration={target_duration:.3f},"
+        f"fade=t=in:st=0:d={fade_d:.2f},fade=t=out:st={max(0.0, target_duration - fade_d):.2f}:d={fade_d:.2f}"
     )
-
     cmd = [
-        FFMPEG, "-y",
-        "-i", str(raw_video),
-        "-filter_complex", filter_str,
-        "-map", "[vloop]",
-        "-t", f"{target_duration:.2f}",
-        *video_encoder_args(20), "-pix_fmt", "yuv420p",
-        str(final_video)
+        FFMPEG, "-y", "-i", str(raw_video), "-vf", vf, "-an",
+        "-frames:v", str(frames_for(target_duration, fps)),
+        *video_encoder_args(20, (rw, rh), fps), "-pix_fmt", "yuv420p", "-r", str(fps),
+        str(final_video),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
     return final_video
 
-def create_fallback_motion_clip(image_path: Path, duration: float, aspect: str, output_path: Path, motion_type: str = "zoom_in") -> Path:
-    """High-quality Ken Burns camera motion with multi-axis movements, pristine 2X upscale headroom, and smooth fade transitions"""
-    dims = ASPECT_RESOLUTIONS.get(aspect, ASPECT_RESOLUTIONS["9:16"])
-    rw, rh = dims["render_w"], dims["render_h"]
-    fps = 30
-    total_frames = max(30, int(duration * fps))
 
-    # High quality upscale for zoompan headroom
-    scale_w = rw * 2
-    scale_h = rh * 2
+def snap_audio_to_frames(audio_path: Path, fps: int = VIDEO_FPS) -> float:
+    """Pads/trims a scene's audio to a whole number of video frames and returns the new duration.
+
+    Each scene clip is a whole number of frames; without this the tiny remainders add up over
+    many scenes and the narration drifts away from the picture.
+    """
+    duration = get_audio_duration(audio_path)
+    target = frames_for(duration, fps) / fps
+    if abs(target - duration) < 0.0005:
+        return duration
+    tmp = audio_path.with_name(f"{audio_path.stem}_snap{audio_path.suffix}")
+    subprocess.run(
+        [FFMPEG, "-y", "-i", str(audio_path), "-af", f"apad=whole_dur={target:.4f},atrim=end={target:.4f}", str(tmp)],
+        check=True, capture_output=True,
+    )
+    os.replace(tmp, audio_path)
+    return get_audio_duration(audio_path)
+
+
+def create_fallback_motion_clip(image_path: Path, duration: float, aspect: str, output_path: Path, motion_type: str = "zoom_in",
+                                resolution: int = 1080, fps: int = VIDEO_FPS) -> Path:
+    """High-quality Ken Burns camera motion with multi-axis movements, upscale headroom, and smooth fade transitions"""
+    rw, rh = render_size(aspect, resolution)
+    total_frames = frames_for(duration, fps)
+
+    # Upscale for zoompan headroom (2x; 1.5x above 1080p to keep 1440p renders manageable)
+    headroom = 2 if max(rw, rh) <= 1920 else 1.5
+    scale_w = int(rw * headroom) // 2 * 2
+    scale_h = int(rh * headroom) // 2 * 2
+    # zoompan steps once per frame: scale the per-frame zoom so motion speed is the same at any fps
+    step = 30 / fps
 
     # Smooth Ken Burns camera movements
     if motion_type == "zoom_in":
         # Slow cinematic zoom in from 1.0 to 1.15
-        vf = f"scale={scale_w}:{scale_h},zoompan=z='min(zoom+0.0008,1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
+        vf = f"scale={scale_w}:{scale_h},zoompan=z='min(zoom+{0.0008 * step:.6f},1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
     elif motion_type == "zoom_out":
         # Slow cinematic zoom out from 1.15 to 1.0
-        vf = f"scale={scale_w}:{scale_h},zoompan=z='if(lte(zoom,1.0),1.15,max(1.001,zoom-0.0008))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
+        vf = f"scale={scale_w}:{scale_h},zoompan=z='if(lte(zoom,1.0),1.15,max(1.001,zoom-{0.0008 * step:.6f}))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
     elif motion_type == "pan_right":
         # Gentle pan from left to right with slight 1.10 zoom
         vf = f"scale={scale_w}:{scale_h},zoompan=z='1.10':x='(it/{duration})*(iw-iw/zoom)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
@@ -781,7 +905,7 @@ def create_fallback_motion_clip(image_path: Path, duration: float, aspect: str, 
         vf = f"scale={scale_w}:{scale_h},zoompan=z='1.08':x='iw/2-(iw/zoom/2)':y='(1-it/{duration})*(ih-ih/zoom)':d={total_frames}:s={rw}x{rh}:fps={fps}"
     else: # static_subtle / clean presentation
         # Subtle breathe zoom (1.0 to 1.04)
-        vf = f"scale={scale_w}:{scale_h},zoompan=z='min(zoom+0.0003,1.04)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
+        vf = f"scale={scale_w}:{scale_h},zoompan=z='min(zoom+{0.0003 * step:.6f},1.04)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
 
     # Soft cinematic dissolve/fade transition at clip boundaries (0.35s in, 0.35s out)
     fade_d = min(0.35, duration / 4)
@@ -791,8 +915,8 @@ def create_fallback_motion_clip(image_path: Path, duration: float, aspect: str, 
     cmd = [
         FFMPEG, "-y", "-loop", "1", "-i", str(image_path),
         "-vf", vf,
-        "-t", f"{duration:.2f}",
-        *video_encoder_args(18), "-pix_fmt", "yuv420p",
+        "-frames:v", str(total_frames),
+        *video_encoder_args(18, (rw, rh), fps), "-pix_fmt", "yuv420p", "-r", str(fps),
         str(output_path)
     ]
     subprocess.run(cmd, check=True, capture_output=True)
@@ -802,7 +926,8 @@ def scene_motion_type(fallback_idx: int, motion_mode: str) -> str:
     mtypes = ["zoom_in", "pan_right", "zoom_out", "tilt_up", "pan_left"]
     return mtypes[fallback_idx % len(mtypes)] if motion_mode != "static" else "static_subtle"
 
-async def animate_scene(image_path: Path, motion_prompt: str, duration: float, aspect: str, output_path: Path, fallback_idx: int = 0, motion_mode: str = "kenburns", project_id: str = "") -> Path:
+async def animate_scene(image_path: Path, motion_prompt: str, duration: float, aspect: str, output_path: Path, fallback_idx: int = 0, motion_mode: str = "kenburns", project_id: str = "",
+                        resolution: int = 1080, fps: int = VIDEO_FPS) -> Path:
     """Full animation controller: supports Ken Burns (Ultra HD), Wan 2.1 AI Motion, and Clean Presentation"""
     chosen_motion = scene_motion_type(fallback_idx, motion_mode)
 
@@ -810,17 +935,18 @@ async def animate_scene(image_path: Path, motion_prompt: str, duration: float, a
         logger.info(f"Wan 2.1 is not supported on {sys.platform}; using Ken Burns ({chosen_motion})")
     elif motion_mode == "wan":
         raw_wan = output_path.parent / f"raw_wan_{output_path.stem}.mp4"
-        success = await animate_scene_wan(image_path, motion_prompt, aspect, raw_wan, project_id=project_id)
+        success = await animate_scene_wan(image_path, motion_prompt, aspect, raw_wan, project_id=project_id, duration=duration)
         if success and raw_wan.exists() and raw_wan.stat().st_size > 1000:
-            logger.info(f"Applying seamless ping-pong loop to Wan 2.1 clip for duration {duration:.2f}s...")
-            await asyncio.to_thread(extend_video_to_duration, raw_wan, duration, aspect, output_path)
+            logger.info(f"Fitting Wan 2.1 clip to the scene length ({duration:.2f}s)...")
+            await asyncio.to_thread(fit_clip_to_duration, raw_wan, duration, aspect, output_path, resolution, fps)
             return output_path
         logger.info(f"Wan 2.1 unavailable or timed out; falling back to Ken Burns ({chosen_motion})")
 
     # Ultra HD Ken Burns camera motion (recommended, 100% distortion-free)
     # FFmpeg runs in a thread so the API stays responsive while it renders
     logger.info(f"Rendering Ken Burns motion ({chosen_motion}) with smooth fade transitions for {output_path.name}")
-    await asyncio.to_thread(create_fallback_motion_clip, image_path, duration, aspect, output_path, motion_type=chosen_motion)
+    await asyncio.to_thread(create_fallback_motion_clip, image_path, duration, aspect, output_path,
+                            motion_type=chosen_motion, resolution=resolution, fps=fps)
     return output_path
 
 # Auto-balance targets: narration sits at a standard speech loudness and the music bed
@@ -829,16 +955,57 @@ VOICE_TARGET_LUFS = -16
 MUSIC_TARGET_LUFS = -30
 
 
+# Scene music levels from the script planner, relative to the auto-balanced bed.
+# Even "high" stays ~11 LU under the narration, and ducking still lowers it while someone speaks.
+MUSIC_LEVEL_GAIN = {"low": 0.6, "medium": 1.0, "high": 1.45}
+MUSIC_RAMP = 1.2  # seconds to glide between two scene levels
+
+
+def music_envelope(levels: list[str], durations: list[float]) -> str:
+    """ffmpeg volume expression (in t) that follows each scene's music level with smooth ramps."""
+    gains = [MUSIC_LEVEL_GAIN.get(lv, 1.0) for lv in levels] or [1.0]
+    if all(abs(g - gains[0]) < 1e-6 for g in gains):
+        return f"{gains[0]:.3f}"
+    ramp = min(MUSIC_RAMP, 0.8 * min(durations))
+    # Ordered (until_time, value) pieces: hold a level, then glide to the next across the boundary
+    pieces: list[tuple[float, str]] = []
+    boundary = 0.0
+    for i in range(len(gains) - 1):
+        boundary += durations[i]
+        start, end = boundary - ramp / 2, boundary + ramp / 2
+        pieces.append((start, f"{gains[i]:.3f}"))
+        if abs(gains[i + 1] - gains[i]) > 1e-6:
+            pieces.append((end, f"({gains[i]:.3f}+({gains[i + 1] - gains[i]:.3f})*(t-{start:.3f})/{ramp:.3f})"))
+    expr = f"{gains[-1]:.3f}"
+    for until, value in reversed(pieces):
+        expr = f"if(lt(t,{until:.3f}),{value},{expr})"
+    return expr
+
+
+_FILTER_CACHE: dict[str, bool] = {}
+
+
+def ffmpeg_has_filter(name: str) -> bool:
+    """Whether this ffmpeg build includes a filter (e.g. 'ass' needs ffmpeg built with libass)."""
+    if name not in _FILTER_CACHE:
+        try:
+            out = subprocess.run([FFMPEG, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=10).stdout
+            _FILTER_CACHE[name] = any(line.split()[1:2] == [name] for line in out.splitlines() if len(line.split()) > 1)
+        except (OSError, subprocess.SubprocessError):
+            _FILTER_CACHE[name] = False
+    return _FILTER_CACHE[name]
+
+
 def _gain(percent: int) -> float:
     """UI level (100 = auto-balanced) -> linear gain, clamped to 0–200%."""
     return max(0, min(200, int(percent))) / 100
 
 
 def format_srt_time(seconds: float) -> str:
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int(round((seconds - int(seconds)) * 1000))
+    total_ms = int(round(max(0.0, seconds) * 1000))  # round once, so .9996s can't become ",1000"
+    hrs, rem = divmod(total_ms, 3_600_000)
+    mins, rem = divmod(rem, 60_000)
+    secs, millis = divmod(rem, 1000)
     return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
 
 def generate_srt_subtitles(scenes: list[dict], scene_durations: list[float], output_srt: Path) -> Path:
@@ -863,6 +1030,9 @@ def generate_srt_subtitles(scenes: list[dict], scene_durations: list[float], out
         lines.append("")
         sub_idx += 1
         current_time += dur
+
+    output_srt.write_text("\n".join(lines), encoding="utf-8")
+    return output_srt
 
 def format_ass_time(seconds: float) -> str:
     hrs = int(seconds // 3600)
@@ -924,6 +1094,9 @@ def assemble_final_video(
     music_ducking: bool = True,
     enable_subtitles: bool = True,
     subtitles_file: Path | None = None,
+    music_levels: list[str] | None = None,
+    resolution: int = 1080,
+    fps: int = VIDEO_FPS,
 ) -> Path:
     """Concatenates scene clips and the voiceover, optionally mixing in a background music bed
     with silky smooth fade transitions and dynamic sidechain ducking. Optionally burns synchronized
@@ -954,13 +1127,20 @@ def assemble_final_video(
 
     # Determine video encoding: burn subtitles if enabled and subtitle file exists
     use_subs = enable_subtitles and subtitles_file is not None and subtitles_file.exists() and subtitles_file.stat().st_size > 10
+    sub_filter = "ass" if subtitles_file is not None and subtitles_file.suffix.lower() == ".ass" else "subtitles"
+    if use_subs and not ffmpeg_has_filter(sub_filter):
+        logger.warning(
+            f"This ffmpeg build has no '{sub_filter}' filter (it needs libass), so captions are not burned in. "
+            "The .srt subtitle file is still saved. Install an ffmpeg built with libass to burn captions."
+        )
+        use_subs = False
     if use_subs:
         logger.info(f"Burning subtitles onto video from {subtitles_file.name}...")
         posix_path = subtitles_file.resolve().as_posix()
         escaped_path = posix_path.replace(":", r"\:")
         filter_name = "ass" if subtitles_file.suffix.lower() == ".ass" else "subtitles"
         vf_sub = f"{filter_name}=filename='{escaped_path}'"
-        video_args = ["-vf", vf_sub, *video_encoder_args(20), "-pix_fmt", "yuv420p"]
+        video_args = ["-vf", vf_sub, *video_encoder_args(20, render_size(aspect, resolution), fps), "-pix_fmt", "yuv420p"]
     else:
         video_args = ["-c:v", "copy"]
 
@@ -971,10 +1151,12 @@ def assemble_final_video(
         logger.info(
             f"Mixing background music: {music_file.name} (music {music_volume}%, voice {voice_volume}%, ducking {'on' if music_ducking else 'off'})"
         )
+        # Per-scene emotional level (low / medium / high) with smooth glides between scenes
+        envelope = music_envelope(music_levels or [], [get_audio_duration(a) for a in scene_audios]) if music_levels else "1.0"
         # Smooth S-curve / sine fade-in (2.5s) and gentle fade-out at the end
         music_chain = (
             f"[2:a]aresample=48000,loudnorm=I={MUSIC_TARGET_LUFS}:TP=-8:LRA=11,aresample=48000,"
-            f"volume={_gain(music_volume):.2f},"
+            f"volume={_gain(music_volume):.2f},volume='{envelope}':eval=frame,"
             f"afade=t=in:st=0:d=2.5:curve=esin,afade=t=out:st={fade_out_start:.2f}:d={fade_out:.2f}:curve=esin[bg];"
         )
         if music_ducking:

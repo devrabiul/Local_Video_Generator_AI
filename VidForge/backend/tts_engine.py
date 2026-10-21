@@ -20,6 +20,10 @@ from loguru import logger
 from ai_engine import BASE_DIR, COMFYUI_DIR, CONFIG_FILE, FFMPEG, FFPROBE, _default_f5_python, _load_config, _setting
 
 ENGINES = ("gemini", "elevenlabs", "f5tts")
+# Engines that voice a whole story in one take (see narration.py); the others go scene by scene
+CONTINUOUS_ENGINES = ("gemini",)
+# Engines that voice every scene in one batch (one model load, one reference, one seed)
+BATCH_ENGINES = ("f5tts",)
 DEFAULT_ENGINE = "gemini"
 
 def _extract_retry_delay(res: httpx.Response, attempt: int, default_delay: float = 25.0) -> float:
@@ -61,6 +65,18 @@ ELEVENLABS_MODEL = _setting("elevenlabs_model", "VIDFORGE_ELEVENLABS_MODEL", "el
 ELEVENLABS_STABILITY = float(_setting("elevenlabs_stability", "VIDFORGE_ELEVENLABS_STABILITY", "0.35"))
 
 F5_PYTHON = Path(_setting("f5_python", "VIDFORGE_F5_PYTHON", str(_default_f5_python(COMFYUI_DIR))))
+# Local voice-cloning model used for "My Voices": f5 (default), indicf5 or omnivoice — see local_tts_cli.py
+# Local voice models for the "Local voice" engine. clone=False ignores the reference recording.
+LOCAL_TTS_MODELS = {
+    "f5": {"label": "F5-TTS v1 Base", "clone": True, "languages": "English, Chinese", "licence": "CC-BY-NC (weights)"},
+    "f5_bengali": {"label": "F5-TTS Bengali (OpenBible)", "clone": True, "languages": "Bengali", "licence": "CC-BY-SA"},
+    "mms_ben": {"label": "MMS Bengali (Meta)", "clone": False, "languages": "Bengali", "licence": "CC-BY-NC"},
+    "omnivoice": {"label": "OmniVoice", "clone": True, "languages": "Bengali, Hindi, English + 600 more", "licence": "CC-BY-NC (weights)"},
+    "indicf5": {"label": "IndicF5 (AI4Bharat)", "clone": True, "languages": "Bengali, Hindi + 9 Indian languages", "licence": "MIT"},
+}
+LOCAL_TTS_PYTHON = Path(_setting("local_tts_python", "VIDFORGE_LOCAL_TTS_PYTHON", str(F5_PYTHON)))
+LOCAL_TTS_SCRIPT = BASE_DIR / "backend" / "local_tts_cli.py"
+LOCAL_TTS_SEED = 1234
 F5_CHECKPOINT = _setting("f5_checkpoint", "VIDFORGE_F5_CHECKPOINT", "")
 F5_VOCAB = _setting("f5_vocab", "VIDFORGE_F5_VOCAB", "")
 F5_CLI_SCRIPT = BASE_DIR / "backend" / "f5_infer_cli.py"
@@ -133,6 +149,12 @@ SAMPLE_STYLE = "warm, intimate storyteller; slow and expressive"
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
+def get_local_tts_model() -> str:
+    """The chosen local voice model; read on every use so a change in Settings applies to the next job."""
+    model = os.environ.get("VIDFORGE_LOCAL_TTS_MODEL") or (_load_config() or {}).get("local_tts_model") or "f5"
+    return model if model in LOCAL_TTS_MODELS else "f5"
+
 
 def get_tts_config() -> dict:
     cfg = _load_config() or {}
@@ -533,36 +555,104 @@ def delete_custom_voice(voice_id: str) -> bool:
         sample.unlink(missing_ok=True)
     return True
 
-async def generate_f5_voiceover(text: str, ref_key: str, output_path: Path) -> Path:
+async def generate_local_batch(
+    texts: list[str],
+    ref_key: str,
+    outputs: list[Path],
+    language: str = "",
+    on_status: Callable[[str], Awaitable[None]] | None = None,
+) -> list[Path]:
+    """Voices several scenes in one process with the local cloning model (see local_tts_cli.py)."""
+    model = get_local_tts_model()
     ref_file, ref_txt = _resolve_f5_reference(ref_key)
+    jobs_file = outputs[0].with_name(f"tmp_local_tts_{uuid.uuid4().hex[:8]}.json")
+    jobs_file.write_text(json.dumps(
+        [{"text": plain_text(t), "output": str(o), "language": language} for t, o in zip(texts, outputs)],
+        ensure_ascii=False,
+    ), encoding="utf-8")
     cmd = [
-        str(F5_PYTHON), str(F5_CLI_SCRIPT),
-        "--ref_audio", str(ref_file),
-        "--ref_text", ref_txt,
-        "--gen_text", plain_text(text),
-        "--output", str(output_path),
-        "--speed", "1.0"
+        str(LOCAL_TTS_PYTHON), str(LOCAL_TTS_SCRIPT), "--backend", model,
+        "--ref_audio", str(ref_file), "--ref_text", ref_txt, "--jobs", str(jobs_file), "--seed", str(LOCAL_TTS_SEED),
     ]
-    if F5_CHECKPOINT:
-        cmd += ["--ckpt_file", F5_CHECKPOINT]
-    if F5_VOCAB:
-        cmd += ["--vocab_file", F5_VOCAB]
+    if model == "f5":
+        if F5_CHECKPOINT:
+            cmd += ["--ckpt_file", F5_CHECKPOINT]
+        if F5_VOCAB:
+            cmd += ["--vocab_file", F5_VOCAB]
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["VIDFORGE_FFMPEG"] = FFMPEG
-    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
-    _, stderr = await proc.communicate()
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, cwd=str(LOCAL_TTS_SCRIPT.parent)
+    )
+    stderr_task = asyncio.create_task(proc.stderr.read())
+    try:
+        async for line in proc.stdout:
+            msg = line.decode(errors="replace").strip()
+            if msg.startswith("DONE ") and on_status:
+                done = int(msg.split()[1]) + 1
+                await on_status(f"Voiced scene {done}/{len(texts)} with {LOCAL_TTS_MODELS[model]['label']}...")
+            elif msg.startswith("Loading") and on_status:
+                await on_status(msg)
+        await proc.wait()
+    finally:
+        jobs_file.unlink(missing_ok=True)
     if proc.returncode != 0:
-        err_msg = stderr.decode(errors="replace")
-        logger.error(f"F5-TTS failed: {err_msg}")
-        raise RuntimeError(f"F5-TTS error: {err_msg}")
+        err_msg = (await stderr_task).decode(errors="replace")
+        logger.error(f"Local TTS ({model}) failed: {err_msg}")
+        raise RuntimeError(f"Local TTS ({model}) error: {err_msg[-1500:]}")
+    missing = [o for o in outputs if not o.exists()]
+    if missing:
+        raise RuntimeError(f"Local TTS did not produce {missing[0].name}")
+    return outputs
+
+
+async def generate_f5_voiceover(text: str, ref_key: str, output_path: Path, language: str = "") -> Path:
+    """Single clip with the local cloning model (voice previews and one-off scenes)."""
+    wav = output_path.with_name(f"{output_path.stem}_local.wav")
+    await generate_local_batch([text], ref_key, [wav], language=language)
+    try:
+        await asyncio.to_thread(_transcode, wav, output_path, ["-b:a", "192k"] if output_path.suffix == ".mp3" else None)
+    finally:
+        wav.unlink(missing_ok=True)
     return output_path
 
 
 # ---------------------------------------------------------------------------
 # Unified entry points
 # ---------------------------------------------------------------------------
+
+def encode_scene_audio(raw: Path, dest: Path) -> None:
+    """Stores a finished scene clip as MP3 (ffmpeg's MP3 keeps the exact length via its LAME header)."""
+    _transcode(raw, dest, ["-b:a", "192k"])
+
+
+async def generate_story_take(
+    texts: list[str],
+    voice: str,
+    output_path: Path,
+    narrator_style: str = "",
+    deliveries: list[str] | None = None,
+    on_status: Callable[[str], Awaitable[None]] | None = None,
+) -> Path:
+    """Voices several consecutive scenes as ONE continuous performance.
+
+    A long pause separates the scenes so narration.split_take can cut the take apart again.
+    """
+    engine, name = split_voice(voice)
+    if engine != "gemini":
+        raise ValueError(f"{engine} does not support continuous takes")
+    joined = " [long pause]\n\n".join(t.strip() for t in texts)
+    arc = [d for d in (deliveries or []) if d]
+    style_parts = [narrator_style or "warm, expressive storyteller",
+                   "one continuous narration in the same voice, tone and pace from start to finish"]
+    if arc:
+        # Gemini takes a single style per request; describe how the emotion moves through the take
+        style_parts.append("emotion moves from " + " to ".join(dict.fromkeys(arc[:1] + arc[-1:])))
+    style = "; ".join(style_parts)[:240]
+    return await generate_gemini_voiceover(joined, name, output_path, style=style, on_status=on_status)
+
 
 def split_voice(voice: str) -> tuple[str, str]:
     """Voice ids are stored as '<engine>:<voice>'."""
@@ -604,7 +694,7 @@ async def generate_voiceover(
             text, name, output_path, delivery=delivery, previous_text=previous_text,
             next_text=next_text, stitch_ids=stitch_ids, language=language, on_status=on_status
         )
-    return await generate_f5_voiceover(text, name, output_path)
+    return await generate_f5_voiceover(text, name, output_path, language=language or "")
 
 
 async def generate_voice_sample(voice: str, engine: str, language: str = "bn") -> str:

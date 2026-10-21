@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
+import { toast } from './Toast';
 import {
   Boxes, RefreshCw, Download, ExternalLink, Copy, Check, Cloud, Terminal,
   ShieldCheck, CircleDashed, CircleAlert, LoaderCircle, Cpu, MemoryStick, HardDrive, Monitor,
@@ -119,15 +120,29 @@ export default function ModelsPage({ apiBase, active }: { apiBase: string; activ
   const [error, setError] = useState("");
   const [hashes, setHashes] = useState<Record<string, HashResult | "running" | string>>({});
 
-  const load = async () => {
+  // `announce` is true for a manual re-scan; the automatic first scan stays silent
+  const load = async (announce = false) => {
     setLoading(true);
     setError("");
     try {
       const res = await fetch(`${apiBase}/api/models`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData(await res.json());
+      const next: Catalog = await res.json();
+      setData(next);
+      if (announce) {
+        const files = next.local.flatMap(l => l.files);
+        const verified = files.filter(f => f.status === "match").length;
+        const problems = files.filter(f => f.status === "mismatch" || f.status === "incomplete" || f.status === "unreadable").length;
+        if (problems > 0) {
+          toast.error("Scan complete", `${problems} file${problems > 1 ? 's' : ''} need attention · ${verified}/${files.length} verified`);
+        } else {
+          toast.success("Scan complete", `${verified}/${files.length} files verified on this device`);
+        }
+      }
     } catch (e) {
-      setError(`Could not load the model list from the backend (${(e as Error).message}). Restart the backend if it was started before this page was added.`);
+      const msg = `Could not load the model list from the backend (${(e as Error).message}). Restart the backend if it was started before this page was added.`;
+      setError(msg);
+      if (announce) toast.error("Re-scan failed", "The backend did not respond.");
     } finally {
       setLoading(false);
     }
@@ -176,8 +191,8 @@ export default function ModelsPage({ apiBase, active }: { apiBase: string; activ
               <div><strong>{verifiedCount}/{allLocal.length}</strong><span>Files verified</span></div>
             </div>
           )}
-          <button type="button" className="btn btn-primary" onClick={load} disabled={loading}>
-            <RefreshCw size={13} className={loading ? 'spin' : ''} /> {loading ? 'Scanning…' : 'Re-scan device'}
+          <button type="button" className="btn btn-primary" onClick={() => load(true)} disabled={loading} aria-busy={loading} title={loading ? 'Scanning…' : 'Re-scan this device'}>
+            <RefreshCw size={13} className={loading ? 'spin' : ''} /> Re-scan device
           </button>
         </div>
       </div>
@@ -237,7 +252,7 @@ export default function ModelsPage({ apiBase, active }: { apiBase: string; activ
                         <p>{model.role}</p>
                         <div className="gallery-meta" style={{ marginTop: 6 }}>
                           <span className="chip chip-primary">{model.precision}</span>
-                          <span className="chip">{model.runtime === 'ollama' ? 'Ollama' : model.runtime === 'comfyui' ? 'ComfyUI' : 'F5-TTS (Python)'}</span>
+                          <span className="chip">{model.runtime === 'ollama' ? 'Ollama' : model.runtime === 'comfyui' ? 'ComfyUI' : 'Local voice (Python)'}</span>
                           <a className="chip" href={model.page} target="_blank" rel="noreferrer"><ExternalLink size={11} /> Model page</a>
                         </div>
                       </div>
@@ -372,6 +387,7 @@ export default function ModelsPage({ apiBase, active }: { apiBase: string; activ
           </p>
         </>
       )}
+
     </div>
   );
 }

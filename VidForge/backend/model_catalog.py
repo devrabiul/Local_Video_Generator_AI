@@ -31,9 +31,9 @@ ZIMAGE_REPO = f"{HF}/Comfy-Org/z_image_turbo"
 GB = 1024 ** 3
 
 
-def _hf_file(repo: str, path: str, size: int, sha256: str | None, comfy_folder: str | None = None) -> dict:
+def _hf_file(repo: str, path: str, size: int, sha256: str | None, comfy_folder: str | None = None, name: str = "") -> dict:
     return {
-        "name": path.rsplit("/", 1)[-1],
+        "name": name or path.rsplit("/", 1)[-1],
         "url": f"{repo}/resolve/main/{path}",
         "page": f"{repo}/blob/main/{path}",
         "size": size,
@@ -201,6 +201,141 @@ MODELS: list[dict] = [
             ],
         },
     },
+    {
+        "id": "wan21-i2v-480p-gguf",
+        "name": "Wan 2.1 Image-to-Video 14B 480p (GGUF Q4_K_M) — recommended",
+        "stage": "Video animation",
+        "role": "Optional. Fits fully in 16 GB of VRAM, so it runs faster and steadier than the 16.4 GB FP8 checkpoint. "
+                "VidForge uses it automatically when installed (Q5_K_M, 12.74 GB, is picked first if present). "
+                "Shares the text encoder, CLIP vision and VAE files listed above.",
+        "runtime": "comfyui",
+        "precision": "GGUF Q4_K_M · 14B parameters",
+        "page": f"{HF}/city96/Wan2.1-I2V-14B-480P-gguf",
+        "files": [
+            _hf_file(f"{HF}/city96/Wan2.1-I2V-14B-480P-gguf", "wan2.1-i2v-14b-480p-Q4_K_M.gguf", 11341184384,
+                     "d91f7139acadb42ea05cdf97b311e5099f714f11fbe4d90916500e2f53cbba82", "unet"),
+        ],
+        "requirements": {
+            "accel_gb": 16,
+            "platform_block": None if WAN_SUPPORTED else "VidForge disables Wan 2.1 motion on macOS.",
+            "lines": [
+                {"label": "GPU memory (VRAM)", "value": "16 GB", "basis": "calculated",
+                 "note": "11.34 GB of weights stay on the GPU, leaving room for 832×480 video latents — no offloading to system RAM."},
+                {"label": "ComfyUI node", "value": "ComfyUI-GGUF (city96)", "basis": "app",
+                 "note": "Loaded with its UnetLoaderGGUF node.", "source": "https://github.com/city96/ComfyUI-GGUF"},
+                {"label": "Licence", "value": "Apache-2.0", "basis": "vendor", "source": f"{HF}/city96/Wan2.1-I2V-14B-480P-gguf"},
+                {"label": "Disk", "value": "11.34 GB", "basis": "calculated"},
+            ],
+        },
+    },
+    {
+        "id": "omnivoice",
+        "name": "OmniVoice",
+        "stage": "Voice (local)",
+        "role": "Optional local voice cloning with strong Bengali (272 h) and Hindi (117 h) training data. "
+                "Enable with local_tts_model = \"omnivoice\".",
+        "runtime": "f5",
+        "precision": "FP16 inference",
+        "page": f"{HF}/k2-fsa/OmniVoice",
+        "files": [
+            _hf_file(f"{HF}/k2-fsa/OmniVoice", "model.safetensors", 2450344112,
+                     "730839316de585f4c8298ec0e1712efc10fb19c6fa4e36eb741cb8d51ebcf6aa"),
+            _hf_file(f"{HF}/k2-fsa/OmniVoice", "audio_tokenizer/model.safetensors", 805665628,
+                     "fe7c5e8785e0a05833e1bfc3e002ec7f55af21e306b2e7154a448c1f54ccfb0d", name="audio_tokenizer/model.safetensors"),
+        ],
+        "requirements": {
+            "accel_gb": 6,
+            "lines": [
+                {"label": "Licence", "value": "Weights CC-BY-NC — non-commercial use only", "basis": "vendor",
+                 "source": f"{HF}/k2-fsa/OmniVoice"},
+                {"label": "GPU", "value": "NVIDIA (CUDA) or Apple Silicon (MPS)", "basis": "vendor",
+                 "source": "https://github.com/k2-fsa/OmniVoice"},
+                {"label": "On a Mac", "value": "Runs on the CPU", "basis": "app",
+                 "note": "Loading onto Apple MPS hung in VidForge's test (omnivoice 0.2.1, torch 2.14), so VidForge uses the CPU there."},
+                {"label": "GPU / unified memory", "value": "≥ 6 GB", "basis": "estimate",
+                 "note": "3.26 GB of weights plus the audio tokenizer and generation buffers."},
+                {"label": "Disk", "value": "3.26 GB", "basis": "calculated"},
+            ],
+        },
+    },
+    {
+        "id": "indicf5",
+        "name": "IndicF5",
+        "stage": "Voice (local)",
+        "role": "Optional local voice cloning for Bengali, Hindi and 9 more Indian languages, commercial use allowed. "
+                "Enable with local_tts_model = \"indicf5\".",
+        "runtime": "f5",
+        "precision": "F5 architecture · 0.4B parameters",
+        "page": f"{HF}/ai4bharat/IndicF5",
+        "files": [
+            _hf_file(f"{HF}/ai4bharat/IndicF5", "model.safetensors", 1402789408, None),
+            _hf_file(f"{HF}/ai4bharat/IndicF5", "checkpoints/vocab.txt", 11283, None),
+        ],
+        "requirements": {
+            "accel_gb": 4,
+            "lines": [
+                {"label": "Licence", "value": "MIT — commercial use allowed", "basis": "vendor", "source": f"{HF}/ai4bharat/IndicF5"},
+                {"label": "Access", "value": "Gated: accept the terms on Hugging Face and log in before the first run", "basis": "vendor",
+                 "source": f"{HF}/ai4bharat/IndicF5"},
+                {"label": "Python package", "value": "AI4Bharat's f5_tts fork (pip install git+https://github.com/ai4bharat/IndicF5.git)", "basis": "vendor",
+                 "source": "https://github.com/ai4bharat/IndicF5"},
+                {"label": "GPU / unified memory", "value": "≥ 4 GB", "basis": "estimate",
+                 "note": "1.40 GB of weights plus the vocoder and inference buffers."},
+                {"label": "Disk", "value": "1.40 GB", "basis": "calculated"},
+            ],
+        },
+    },
+    {
+        "id": "f5-openbible-bengali",
+        "name": "F5-TTS Bengali (OpenBible)",
+        "stage": "Voice (local)",
+        "role": "Optional Bengali voice cloning: F5-TTS trained from scratch on ~30,500 Bengali Bible readings. "
+                "Choose it in Studio Settings → Local voice model.",
+        "runtime": "f5",
+        "precision": "F5-TTS v1 Base architecture · checkpoint includes EMA weights",
+        "page": f"{HF}/multilingual-tts/F5-TTS-OpenBible-Bengali",
+        "files": [
+            _hf_file(f"{HF}/multilingual-tts/F5-TTS-OpenBible-Bengali", "model_last.pt", 5374081699,
+                     "d60ea34bfef6116d01f7ce989eafe1a30d66db4eb71ae261018237f55211497f"),
+            _hf_file(f"{HF}/multilingual-tts/F5-TTS-OpenBible-Bengali", "vocab.txt", 308, None),
+        ],
+        "requirements": {
+            "accel_gb": 4,
+            "lines": [
+                {"label": "Licence", "value": "CC-BY-SA-4.0 (attribution, share-alike)", "basis": "vendor",
+                 "source": f"{HF}/multilingual-tts/F5-TTS-OpenBible-Bengali"},
+                {"label": "Training data", "value": "Bible read speech only — formal, reading-style delivery", "basis": "vendor",
+                 "source": f"{HF}/multilingual-tts/F5-TTS-OpenBible-Bengali"},
+                {"label": "GPU / unified memory", "value": "≥ 4 GB", "basis": "estimate",
+                 "note": "Same network size as F5-TTS v1 Base; the 5.37 GB file also holds training state that is not loaded for inference."},
+                {"label": "Disk", "value": "5.37 GB", "basis": "calculated"},
+            ],
+        },
+    },
+    {
+        "id": "mms-tts-ben",
+        "name": "MMS Bengali (Meta)",
+        "stage": "Voice (local)",
+        "role": "Optional fixed Bengali voice (VITS) — fast and light, but one voice only (no cloning). "
+                "Choose it in Studio Settings → Local voice model.",
+        "runtime": "f5",
+        "precision": "VITS · 16 kHz output",
+        "page": f"{HF}/facebook/mms-tts-ben",
+        "files": [
+            _hf_file(f"{HF}/facebook/mms-tts-ben", "model.safetensors", 145255160,
+                     "6a0e055ec13ecd0a07ead04dec7974a071846e64a9fe0c0b188f61b32a9bd5ba"),
+        ],
+        "requirements": {
+            "accel_gb": 0,
+            "lines": [
+                {"label": "Licence", "value": "CC-BY-NC-4.0 — non-commercial use only", "basis": "vendor",
+                 "source": f"{HF}/facebook/mms-tts-ben"},
+                {"label": "Runs without a GPU", "value": "Yes — about 0.7 s per sentence on an Apple M4 CPU", "basis": "app",
+                 "note": "Measured in VidForge's Bengali voice test."},
+                {"label": "Disk", "value": "145 MB", "basis": "calculated"},
+            ],
+        },
+    },
 ]
 
 CLOUD_MODELS = [
@@ -245,6 +380,9 @@ def _hf_cache_candidates(page_url: str, rel_path: str) -> list[Path]:
 
 def _candidates(model: dict, f: dict) -> list[Path]:
     rel = f["url"].split("/resolve/main/", 1)[1]
+    if f["comfy_folder"] in ("unet", "diffusion_models"):
+        # ComfyUI (and ComfyUI-GGUF) load diffusion models from either folder
+        return [COMFYUI_DIR / "models" / folder / f["name"] for folder in (f["comfy_folder"], "diffusion_models" if f["comfy_folder"] == "unet" else "unet")]
     if f["comfy_folder"]:
         return [COMFYUI_DIR / "models" / f["comfy_folder"] / f["name"]]
     paths: list[Path] = []

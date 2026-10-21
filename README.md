@@ -212,6 +212,11 @@ Copy `VidForge/backend/config.example.json` to `VidForge/backend/config.json` an
 | `gemini_tts_model` | `VIDFORGE_GEMINI_TTS_MODEL` | `gemini-3.8-flash-tts` |
 | `elevenlabs_model` / `elevenlabs_stability` | `VIDFORGE_ELEVENLABS_MODEL` / `VIDFORGE_ELEVENLABS_STABILITY` | `eleven_v4` / `0.35` (lower = more expressive) |
 | `f5_checkpoint` / `f5_vocab` | `VIDFORGE_F5_CHECKPOINT` / `VIDFORGE_F5_VOCAB` | built-in F5-TTS base model |
+| `local_tts_model` | `VIDFORGE_LOCAL_TTS_MODEL` | `f5` — or `omnivoice` (best Bengali/Hindi, non-commercial weights) / `indicf5` (MIT, gated) |
+| `local_tts_python` | `VIDFORGE_LOCAL_TTS_PYTHON` | same as `f5_python`; point it at the environment where the chosen model is installed |
+| `wan_unet` | `VIDFORGE_WAN_UNET` | best installed of: 480p GGUF Q5_K_M → Q4_K_M → 480p FP8 → 720p FP8 |
+| `wan_quality` | `VIDFORGE_WAN_QUALITY` | `balanced` (49 frames, 30 steps); `fast` (33, 20) or `quality` (81, 40 — Wan's official defaults) |
+| `ollama_models_dir` | `OLLAMA_MODELS` | `~/.ollama/models` (used by the AI Models page) |
 | `ollama_url` / `comfyui_url` | `VIDFORGE_OLLAMA_URL` / `VIDFORGE_COMFYUI_URL` | `http://127.0.0.1:11434` / `http://127.0.0.1:8188` |
 
 Restart the backend after changing the configuration.
@@ -236,7 +241,17 @@ To add API keys: open `http://127.0.0.1:8700/`, click the **Voice** capsule in t
 ### My Voices (F5-TTS)
 Record or upload **8–12 seconds** of a clear, expressive human voice and type its exact transcript. F5-TTS copies the emotion and pacing of the recording, so a lively reading gives lively narration. Recordings are stored in `VidForge/backend/ref_voices/custom/` and are excluded from Git.
 
-The default F5 checkpoint is trained mainly on English and Chinese. For better Bengali, point `f5_checkpoint` (and `f5_vocab`) at a Bengali fine-tuned F5-TTS model.
+The default F5 checkpoint is trained mainly on English and Chinese and cannot read Bengali script. For Bengali or Hindi, pick another **Voice model** in the Local Voice panel of the production form (saved as `local_tts_model`).
+
+| Voice model | Bengali clarity* | Clones My Voices | Licence | Install into the `local_tts_python` environment |
+| :--- | :--- | :--- | :--- | :--- |
+| **OmniVoice** (`omnivoice`) | best — 22.5% CER | yes | weights CC-BY-NC | `pip install omnivoice soundfile` |
+| **MMS Bengali** (`mms_ben`) | good — 26.0% CER, fastest | no (one voice) | CC-BY-NC | `pip install transformers torch soundfile` |
+| **F5 Bengali OpenBible** (`f5_bengali`) | weak — ~58% CER | yes | CC-BY-SA | `pip install git+https://github.com/SWivid/F5-TTS.git` |
+| **IndicF5** (`indicf5`) | not tested (gated) | yes | MIT | `pip install git+https://github.com/ai4bharat/IndicF5.git`, accept the terms on Hugging Face, `huggingface-cli login` |
+| F5-TTS v1 Base (`f5`) | unusable for Bengali | yes | CC-BY-NC | (default) |
+
+\*Character error rate when Whisper large-v3-turbo transcribes the generated Bengali; Whisper scores 12.2% on a real human recording, so lower is clearer. Models download on first use.
 
 ---
 
