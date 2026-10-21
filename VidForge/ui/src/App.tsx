@@ -71,6 +71,8 @@ interface CharacterRefState {
   imageUrl: string;
   file?: File;
   previewUrl?: string;
+  isAnalyzing?: boolean;
+  featuresSummary?: string;
 }
 
 interface SystemStatus {
@@ -845,6 +847,46 @@ export default function App() {
     }
   };
 
+  const handleCharacterPhotoUpload = async (charId: string, file: File) => {
+    const previewUrl = URL.createObjectURL(file);
+    setCharacterRefs(prev => prev.map(c => c.id === charId ? { ...c, file, previewUrl, isAnalyzing: true } : c));
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const currentChar = characterRefs.find(c => c.id === charId);
+      if (currentChar?.name) {
+        fd.append("character_name", currentChar.name);
+      }
+      fd.append("video_type", videoType);
+
+      const res = await fetch(`${API_BASE}/api/characters/upload`, {
+        method: "POST",
+        body: fd
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCharacterRefs(prev => prev.map(c => {
+          if (c.id !== charId) return c;
+          return {
+            ...c,
+            file,
+            previewUrl,
+            imageUrl: data.url,
+            look: data.look || c.look,
+            featuresSummary: data.features_summary || "",
+            isAnalyzing: false
+          };
+        }));
+        toast.success("Facial features analyzed & cartoon style extracted!");
+      } else {
+        setCharacterRefs(prev => prev.map(c => c.id === charId ? { ...c, isAnalyzing: false } : c));
+      }
+    } catch (err) {
+      console.error("Failed to analyze character photo:", err);
+      setCharacterRefs(prev => prev.map(c => c.id === charId ? { ...c, isAnalyzing: false } : c));
+    }
+  };
+
   const setVoiceRecording = (blob: Blob, filename: string) => {
     if (newVoiceUrl) URL.revokeObjectURL(newVoiceUrl);
     setNewVoiceFile(new File([blob], filename, { type: blob.type }));
@@ -989,7 +1031,7 @@ export default function App() {
 
     setLoadingVoice(playKey);
     try {
-      const res = await fetch(`${API_BASE}/api/voices/preview?voice=${encodeURIComponent(vId)}&engine=${eng}&language=${language}`);
+      const res = await fetch(`${API_BASE}/api/voices/preview?voice=${encodeURIComponent(vId)}&engine=${eng}&language=${language}&force=true`);
       if (res.ok) {
         const data = await res.json();
         const audioUrl = `${API_BASE}${data.url}?t=${Date.now()}`;
@@ -2030,10 +2072,7 @@ Visual: An iron axe splashing into deep river water, dramatic camera.`}
                                       style={{ display: 'none' }}
                                       onChange={e => {
                                         const file = e.target.files?.[0];
-                                        if (file) {
-                                          const previewUrl = URL.createObjectURL(file);
-                                          setCharacterRefs(characterRefs.map(c => c.id === char.id ? { ...c, file, previewUrl } : c));
-                                        }
+                                        if (file) handleCharacterPhotoUpload(char.id, file);
                                       }}
                                     />
                                   </label>
@@ -2051,22 +2090,32 @@ Visual: An iron axe splashing into deep river water, dramatic camera.`}
                                         style={{ display: 'none' }}
                                         onChange={e => {
                                           const file = e.target.files?.[0];
-                                          if (file) {
-                                            const previewUrl = URL.createObjectURL(file);
-                                            setCharacterRefs(characterRefs.map(c => c.id === char.id ? { ...c, file, previewUrl } : c));
-                                          }
+                                          if (file) handleCharacterPhotoUpload(char.id, file);
                                         }}
                                       />
                                     </label>
-                                    <div style={{ fontSize: 9.5, color: 'var(--a-green-bright)' }}>✓ ছবি নির্বাচন হয়েছে</div>
+                                    {char.isAnalyzing ? (
+                                      <div style={{ fontSize: 9.5, color: 'var(--a-purple)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                        <RefreshCw size={11} className="animate-spin" /> AI মুখের অবয়ব শনাক্ত করছে...
+                                      </div>
+                                    ) : (
+                                      <div style={{ fontSize: 9.5, color: 'var(--a-green-bright)' }}>✓ ছবি শনাক্ত ও বিশ্লেষিত হয়েছে</div>
+                                    )}
                                   </div>
                                 ) : (
                                   <div style={{ fontSize: 10, color: 'var(--t-muted)', lineHeight: 1.3 }}>
-                                    মানুষের একটি পরিষ্কার পোর্ট্রেট ছবি দিন (Face photo, max 15MB)
+                                    আপনার একটি পরিষ্কার পোর্ট্রেট ছবি দিন (AI স্বয়ংক্রিয়ভাবে আপনার চেহারার কার্টুন মডেল তৈরি করবে)
                                   </div>
                                 )}
                               </div>
                             </div>
+
+                            {/* Features Summary Badge */}
+                            {char.featuresSummary && (
+                              <div style={{ fontSize: 10.5, color: 'var(--a-purple)', background: 'rgb(168 85 247 / calc(0.12 * var(--tint)))', padding: '5px 8px', borderRadius: 6, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
+                                <Sparkles size={11} style={{ flexShrink: 0 }} /> <span><strong>শনাক্ত অবয়ব:</strong> {char.featuresSummary}</span>
+                              </div>
+                            )}
 
                             {/* Character Name */}
                             <div style={{ marginBottom: 6 }}>
@@ -2084,15 +2133,26 @@ Visual: An iron axe splashing into deep river water, dramatic camera.`}
 
                             {/* Character Look / Traits */}
                             <div>
-                              <label style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--t-body)', display: 'block', marginBottom: 3 }}>
-                                চেহারা ও স্টাইল (Traits / Look - Optional):
-                              </label>
-                              <input
-                                type="text"
-                                placeholder="যেমন: ৩০ বছর বয়সী, ছোট চুল, কালো জ্যাকেট"
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+                                <label style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--t-body)' }}>
+                                  চেহারা ও কার্টুন স্টাইল (Traits / Cartoon Likeness):
+                                </label>
+                                {char.file && !char.isAnalyzing && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCharacterPhotoUpload(char.id, char.file!)}
+                                    style={{ background: 'none', border: 'none', color: 'var(--a-purple)', cursor: 'pointer', fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 3 }}
+                                  >
+                                    <Wand2 size={10} /> Re-analyze Face
+                                  </button>
+                                )}
+                              </div>
+                              <textarea
+                                rows={2}
+                                placeholder="আপনার ছবি দিলে AI স্বয়ংক্রিয়ভাবে হুবহু মুখের কার্টুন স্টাইল লিখবে"
                                 value={char.look}
                                 onChange={e => setCharacterRefs(characterRefs.map(c => c.id === char.id ? { ...c, look: e.target.value } : c))}
-                                style={{ width: '100%', padding: '6px 8px', fontSize: 11.5 }}
+                                style={{ width: '100%', padding: '6px 8px', fontSize: 11.5, resize: 'vertical' }}
                               />
                             </div>
                           </div>

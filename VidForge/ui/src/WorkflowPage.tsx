@@ -51,17 +51,17 @@ const STAGES: Stage[] = [
   },
   {
     status: 'VOICEOVER',
-    title: 'Voiceover',
-    engine: 'Gemini TTS · ElevenLabs · F5-TTS / local clone',
-    short: 'Gemini · ElevenLabs · F5',
-    output: 'Narration audio',
+    title: 'Master Audio First',
+    engine: 'Gemini TTS · ElevenLabs · OmniVoice / F5-TTS',
+    short: 'Master Audio First',
+    output: 'Master Audio Track',
     range: [30, 45],
     color: 'var(--a-green)',
     Icon: Mic,
     points: [
-      'Continuous engines read the whole story as one take, then it is split back into scenes at the silences.',
-      'Local cloning voices every scene in one batch so the voice stays consistent.',
-      'Each clip is padded with its pause and snapped to the video frame grid. Its length sets the scene length.',
+      'The entire story narrative and dialogue are recorded as ONE complete, continuous master audio performance first.',
+      'Natural conversational cadence: no robotic stop-start line-by-line takes or artificial dead silences between scenes.',
+      'The master audio track drives the video: each scene visual and AI motion is synchronized to its dialogue segment.',
     ],
   },
   {
@@ -90,7 +90,7 @@ const STAGES: Stage[] = [
     points: [
       'Ken Burns pans and zooms each still with FFmpeg: fast and light on the GPU.',
       'Wan 2.1 generates real AI motion in ComfyUI: slower and needs more VRAM.',
-      'Each clip runs exactly as long as its scene audio.',
+      'Each clip runs exactly as long as its scene audio segment from the master track.',
     ],
   },
   {
@@ -103,7 +103,7 @@ const STAGES: Stage[] = [
     color: 'var(--a-cyan)',
     Icon: Music,
     points: [
-      'Clips and narration are joined in order, with transitions.',
+      'Clips and continuous narration are joined in order, with transitions.',
       'Background music is mixed under the voice and ducks while someone speaks.',
       'Subtitles are burned in and also saved as a separate .srt file.',
     ],
@@ -171,18 +171,18 @@ function Phase({ num, title, sub, children, stacked }: { num: string; title: str
 function PipelineDiagram() {
   const [prompt, script, voice, image, motion, compose, done] = STAGES;
   return (
-    <div className="wf-flow" role="img" aria-label="Video generation pipeline: plan (prompt, script), produce for each scene (voiceover, image, camera motion), deliver (final mix, finished video)">
+    <div className="wf-flow" role="img" aria-label="Video generation pipeline: plan (prompt, script), master audio and scene production, deliver (final mix, finished video)">
       <Phase num="1" title="Plan" sub="Turn your idea into scenes">
         <FlowNode stage={prompt} step={1} />
         <Link vertical />
         <FlowNode stage={script} step={2} />
       </Phase>
 
-      <Link label="scenes" />
+      <Link label="storyboard" />
 
-      <Phase num="2" title="Produce" sub="Cached per scene, reused on re-render" stacked>
+      <Phase num="2" title="Audio-First Production" sub="Continuous voice track recorded first, scenes synced to audio" stacked>
         <FlowNode stage={voice} step={3} />
-        <Link vertical label="sets scene length" />
+        <Link vertical label="master audio syncs scene length" />
         <FlowNode stage={image} step={4} />
         <Link vertical />
         <FlowNode stage={motion} step={5} />
@@ -200,6 +200,11 @@ function PipelineDiagram() {
 }
 
 const NOTES: { Icon: LucideIcon; title: string; text: string }[] = [
+  {
+    Icon: Mic,
+    title: 'Master Audio-First Workflow',
+    text: 'Rather than generating speech line-by-line per image, VidForge converts your entire story dialogue into a single continuous audio recording first. The video scenes and AI animations are then synchronized precisely to this voiceover.',
+  },
   {
     Icon: Layers,
     title: 'Smart re-renders',

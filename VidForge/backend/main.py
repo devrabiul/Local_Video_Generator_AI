@@ -231,11 +231,11 @@ async def test_tts_key(req: TestKeyRequest):
         return {"valid": False, "message": f"Connection error: {str(e)}"}
 
 @app.get("/api/voices/preview")
-async def get_voice_preview(voice: str, engine: str = "gemini", language: str = "bn"):
+async def get_voice_preview(voice: str, engine: str = "gemini", language: str = "bn", force: bool = False):
     if not voice:
         raise HTTPException(status_code=400, detail="Voice is required")
     try:
-        url = await tts_engine.generate_voice_sample(voice=voice, engine=engine, language=language)
+        url = await tts_engine.generate_voice_sample(voice=voice, engine=engine, language=language, force=force)
         return {"url": url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -590,18 +590,93 @@ async def suggest_thumbnail_headlines(job_id: str):
         raise HTTPException(status_code=502, detail=f"Ollama could not suggest headlines: {e}")
     return {"headlines": headlines}
 
+@app.post("/api/jobs/{job_id}/poster/generate")
+async def generate_thematic_poster(job_id: str):
+    """Synthesizes the core theme of the video and renders a master cinematic poster artwork."""
+    job = _project_or_404(job_id)
+    title = job.get("title", "")
+    story_prompt = job.get("story_prompt", "")
+    scenes = job.get("scenes", [])
+    video_type = job.get("video_type", "story")
+    language = job.get("language", "bn")
+    aspect_ratio = job.get("aspect_ratio", "16:9")
+    character_refs = job.get("character_references") or []
+    
+    try:
+        concept = await ai_engine.generate_thematic_poster_concept(
+            title=title,
+            story_prompt=story_prompt,
+            scenes=scenes,
+            video_type=video_type,
+            language=language,
+            character_references=character_refs
+        )
+    except Exception as e:
+        logger.error(f"Failed to generate poster concept: {e}")
+        raise HTTPException(status_code=502, detail=f"Ollama could not generate poster concept: {e}")
+    
+    poster_prompt = concept.get("poster_prompt", "").strip()
+    if not poster_prompt:
+        raise HTTPException(status_code=502, detail="Failed to synthesize poster prompt")
+        
+    work = projects.work_dir(job_id)
+    tmp = work / f"thumb_pending_{uuid.uuid4().hex[:8]}.png"
+    try:
+        await ai_engine.generate_scene_image(poster_prompt, aspect_ratio, tmp, project_id=job_id)
+        if get_job(job_id) is None:
+            projects.purge_project_files(job_id)
+            raise HTTPException(status_code=404, detail="Project not found")
+        url = _save_thumb_background(job_id, tmp.read_bytes(), ".png")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Image generation failed in ComfyUI: {e}")
+    finally:
+        tmp.unlink(missing_ok=True)
+        
+    return {
+        "url": url,
+        "prompt": poster_prompt,
+        "headline": concept.get("headline", title),
+        "tagline": concept.get("tagline", ""),
+        "subline": concept.get("subline", ""),
+        "theme_summary": concept.get("theme_summary", ""),
+        "recommended_style": concept.get("recommended_style", "cinematic_gold"),
+        "textColor": concept.get("textColor", "#ffffff"),
+        "accentColor": concept.get("accentColor", "#facc15"),
+    }
+
 CHARACTERS_UPLOAD_DIR = projects.JOBS_DIR / "uploads" / "characters"
 CHARACTERS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 @app.post("/api/characters/upload")
-async def upload_character_image(file: UploadFile = File(...)):
+async def upload_character_image(
+    file: UploadFile = File(...),
+    character_name: str = Form(""),
+    video_type: str = Form("animation")
+):
     data, suffix = await _read_image(file)
     CHARACTERS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"char_{uuid.uuid4().hex[:10]}{suffix}"
     out_file = CHARACTERS_UPLOAD_DIR / filename
     out_file.write_bytes(data)
     url = f"/jobs/uploads/characters/{filename}"
-    return {"url": url, "filename": filename}
+
+    # Analyze face to extract accurate 3D cartoon character likeness
+    analysis = await ai_engine.extract_character_face_features(
+        image_path=out_file,
+        character_name=character_name,
+        video_type=video_type
+    )
+
+    return {
+        "url": url,
+        "filename": filename,
+        "name": analysis.get("name", character_name),
+        "look": analysis.get("look", ""),
+        "cartoon_look": analysis.get("cartoon_look", ""),
+        "features_summary": analysis.get("features_summary", "")
+    }
 
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 app.mount("/jobs", StaticFiles(directory=str(JOBS_DIR)), name="jobs")

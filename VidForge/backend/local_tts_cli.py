@@ -68,7 +68,13 @@ class OmniVoiceBackend:
         self.prompt = self.model.create_voice_clone_prompt(ref_audio=ref_audio, ref_text=ref_text)
 
     def __call__(self, text: str, language: str) -> np.ndarray:
-        return to_float32(self.model.generate(text=text, language=language or None, voice_clone_prompt=self.prompt)[0])
+        lang_map = {
+            "bn": "Bengali", "hi": "Hindi", "en": "English",
+            "es": "Spanish", "fr": "French", "de": "German",
+            "ar": "Arabic", "zh": "Chinese", "ja": "Japanese"
+        }
+        lang = lang_map.get(language, language) or "Bengali"
+        return to_float32(self.model.generate(text=text, language=lang, voice_clone_prompt=self.prompt)[0])
 
 
 class IndicF5Backend:

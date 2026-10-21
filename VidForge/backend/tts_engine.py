@@ -20,8 +20,8 @@ from loguru import logger
 from ai_engine import BASE_DIR, COMFYUI_DIR, CONFIG_FILE, FFMPEG, FFPROBE, _default_f5_python, _load_config, _setting
 
 ENGINES = ("gemini", "elevenlabs", "f5tts")
-# Engines that voice a whole story in one take (see narration.py); the others go scene by scene
-CONTINUOUS_ENGINES = ("gemini", "f5tts")
+# Engines that voice a whole story in one take (see narration.py)
+CONTINUOUS_ENGINES = ("gemini", "elevenlabs", "f5tts")
 # Engines that voice every scene in one batch (one model load, one reference, one seed)
 BATCH_ENGINES = ("f5tts",)
 DEFAULT_ENGINE = "gemini"
@@ -144,6 +144,11 @@ SAMPLE_PHRASES = {
     "en": "Welcome to VidForge. [short pause] Tonight, I'll tell you the story of a forgotten kingdom… [whispers] one that no one has ever told before."
 }
 SAMPLE_STYLE = "warm, intimate storyteller; slow and expressive"
+LOCAL_SAMPLE_PHRASES = {
+    "bn": "আজ আপনাদের শোনাব এক হারিয়ে যাওয়া সুন্দর রাজ্যের গল্প, যে গল্প আগে কেউ কখনো বলেনি।",
+    "hi": "आज मैं आपको एक खोए हुए खूबसूरत राज्य की कहानी सुनाऊँगा, जो पहले कभी किसी ने नहीं सुनाई।",
+    "en": "Tonight, I will tell you the story of a beautiful forgotten kingdom, one that no one has ever told before."
+}
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +546,8 @@ def save_custom_voice(name: str, transcript: str, language: str, audio_bytes: by
     manifest = _read_custom_manifest()
     manifest[voice_id] = {"name": name, "file": wav_path.name, "text": transcript, "lang": language, "duration": round(duration, 1)}
     _write_custom_manifest(manifest)
+    for sample in SAMPLES_DIR.glob(f"f5tts_{voice_id}_*"):
+        sample.unlink(missing_ok=True)
     logger.info(f"Saved custom F5 voice '{name}' ({voice_id}, {duration:.1f}s)")
     return {"id": voice_id, **manifest[voice_id]}
 
@@ -654,13 +661,16 @@ async def generate_story_take(
         return await generate_gemini_voiceover(joined, name, output_path, style=style, on_status=on_status)
     elif engine in BATCH_ENGINES:
         # Local TTS (OmniVoice, F5-TTS) voices the continuous story take
-        # Three periods indicate a natural sentence pause between scenes so silencedetect finds cut points
+        # Natural sentence spacing ensures smooth human delivery
         joined = " ... \n\n".join(t.strip() for t in texts)
         wav = output_path.with_name(f"{output_path.stem}_raw.wav")
         await generate_local_batch([joined], name, [wav], language=language, on_status=on_status)
         if wav.exists():
             os.replace(wav, output_path)
         return output_path
+    elif engine == "elevenlabs":
+        joined = " ... \n\n".join(t.strip() for t in texts)
+        return await generate_elevenlabs_voiceover(joined, name, output_path, on_status=on_status)
     raise ValueError(f"{engine} does not support continuous takes")
 
 
@@ -707,17 +717,29 @@ async def generate_voiceover(
     return await generate_f5_voiceover(text, name, output_path, language=language or "")
 
 
-async def generate_voice_sample(voice: str, engine: str, language: str = "bn") -> str:
+async def generate_voice_sample(voice: str, engine: str, language: str = "bn", force: bool = False) -> str:
     """Generates (and caches) a short expressive preview for a voice."""
     SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # If custom voice, resolve its registered language
+    custom_meta = _read_custom_manifest().get(voice)
+    if custom_meta and custom_meta.get("lang"):
+        language = custom_meta["lang"]
+        
     language = language if language in SAMPLE_PHRASES else "en"
-    model = {"gemini": GEMINI_MODEL, "elevenlabs": ELEVENLABS_MODEL}.get(engine, "f5")
+    local_model = get_local_tts_model()
+    model = {"gemini": GEMINI_MODEL, "elevenlabs": ELEVENLABS_MODEL}.get(engine, local_model)
     clean_voice = re.sub(r"[^A-Za-z0-9_-]", "_", voice)
     sample_file = SAMPLES_DIR / f"{engine}_{clean_voice}_{language}_{model}.mp3"
 
+    if force and sample_file.exists():
+        sample_file.unlink(missing_ok=True)
+
     if not sample_file.exists() or sample_file.stat().st_size == 0:
+        phrase_dict = LOCAL_SAMPLE_PHRASES if (engine in BATCH_ENGINES or engine in ("f5tts", "f5", "f5-tts")) else SAMPLE_PHRASES
+        test_text = phrase_dict.get(language, phrase_dict["en"])
         await generate_voiceover(
-            text=SAMPLE_PHRASES[language],
+            text=test_text,
             voice=f"{engine}:{voice}",
             output_path=sample_file,
             delivery=SAMPLE_STYLE,

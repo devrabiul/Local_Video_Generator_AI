@@ -32,9 +32,9 @@ def group_into_takes(texts: list[str], max_chars: int = TAKE_MAX_CHARS) -> list[
     return takes
 
 
-def detect_silences(path: Path) -> list[tuple[float, float]]:
+def detect_silences(path: Path, noise_db: int = -35, min_dur: float = 0.18) -> list[tuple[float, float]]:
     res = subprocess.run(
-        [FFMPEG, "-i", str(path), "-af", f"silencedetect=noise={SILENCE_DB}dB:d={SILENCE_MIN}", "-f", "null", "-"],
+        [FFMPEG, "-i", str(path), "-af", f"silencedetect=noise={noise_db}dB:d={min_dur}", "-f", "null", "-"],
         capture_output=True, text=True,
     )
     starts = [float(x) for x in re.findall(r"silence_start: (-?[\d.]+)", res.stderr)]
@@ -43,26 +43,34 @@ def detect_silences(path: Path) -> list[tuple[float, float]]:
     for s, e in zip(starts, ends):
         if e <= s:
             continue
-        if merged and s - merged[-1][1] < 0.06:  # touching silences are one pause
+        if merged and s - merged[-1][1] < 0.08:  # touching silences are one pause
             merged[-1] = (merged[-1][0], e)
         else:
             merged.append((s, e))
     return merged
 
 
-def find_cut_points(silences: list[tuple[float, float]], weights: list[int], total: float) -> list[float] | None:
-    """One cut per scene boundary: the pause nearest each boundary's expected time.
-
-    Expected times come from each scene's share of the text. Longer pauses are preferred, since
-    the take places a long pause between scenes. Returns None if any boundary has no
-    convincing pause nearby, so the caller can fall back to voicing scenes separately.
+def find_cut_points(take: Path, weights: list[int], total: float) -> list[float]:
+    """Finds optimal scene boundaries on the continuous master take.
+    
+    Prefers natural spoken pauses / silences between sentences. If continuous conversational
+    speech has no audible silence at a boundary, falls back to text-proportional boundary
+    timing to ensure the original continuous performance is ALWAYS preserved.
     """
     n = len(weights)
-    if n == 1:
+    if n <= 1:
         return []
     total_w = sum(weights) or 1
     avg_scene = total / n
-    tolerance = max(1.5, 0.45 * avg_scene)
+    tolerance = max(2.0, 0.5 * avg_scene)
+
+    # Multi-pass silence detection: standard pauses first, sensitive breath pauses second
+    silences = detect_silences(take, noise_db=-35, min_dur=0.18)
+    if len(silences) < n - 1:
+        sensitive = detect_silences(take, noise_db=-28, min_dur=0.08)
+        if len(sensitive) > len(silences):
+            silences = sensitive
+
     cuts: list[float] = []
     cumulative = 0
     used_until = 0.0
@@ -70,38 +78,55 @@ def find_cut_points(silences: list[tuple[float, float]], weights: list[int], tot
         cumulative += weights[k]
         expected = total * cumulative / total_w
         best, best_score = None, None
+        
         for start, end in silences:
             mid = (start + end) / 2
-            if mid <= used_until + 0.5 or end >= total - 0.2:
+            if mid <= used_until + 0.4 or end >= total - 0.2:
                 continue
             distance = abs(mid - expected)
             if distance > tolerance:
                 continue
-            score = distance - 1.5 * min(end - start, 1.5)  # long pauses win ties
+            score = distance - 1.2 * min(end - start, 1.5)  # long natural pauses win ties
             if best_score is None or score < best_score:
                 best, best_score = mid, score
+
+        # If no silence was near the expected time, use expected time clamped safely
         if best is None:
-            return None
-        cuts.append(best)
-        used_until = best
+            min_bound = used_until + 0.5
+            max_bound = total - (0.5 * (n - 1 - k))
+            cut_point = max(min_bound, min(expected, max_bound))
+            logger.info(f"Boundary {k+1}/{n-1}: no distinct silence near {expected:.2f}s; using proportional cut at {cut_point:.2f}s")
+        else:
+            cut_point = best
+
+        cuts.append(round(cut_point, 3))
+        used_until = cut_point
+
     return cuts
 
 
 def split_take(take: Path, texts: list[str], outputs: list[Path]) -> bool:
-    """Cuts one take into per-scene clips. Returns False if the cut points can't be found."""
+    """Cuts one continuous master take into per-scene clips.
+    
+    Guaranteed to succeed: always derives scene clips from the single continuous master recording.
+    """
     total = get_audio_duration(take)
-    weights = [max(1, len(re.sub(r"\[[^\]]*\]|\s+", "", t))) for t in texts]
-    cuts = find_cut_points(detect_silences(take), weights, total)
-    if cuts is None:
-        logger.warning(f"Could not find {len(texts) - 1} scene pauses in {take.name}; voicing these scenes separately")
+    if total <= 0:
+        logger.error(f"Cannot split take {take}: invalid audio duration ({total})")
         return False
+
+    weights = [max(1, len(re.sub(r"\[[^\]]*\]|\s+", "", t))) for t in texts]
+    cuts = find_cut_points(take, weights, total)
     bounds = [0.0, *cuts, total]
-    # Cut exactly at the natural sentence pauses so the scenes rejoin seamlessly into the continuous performance
+
+    # Cut exactly at the boundaries so scenes rejoin seamlessly into the continuous performance
     for (start, end), out in zip(zip(bounds, bounds[1:]), outputs):
+        out.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [FFMPEG, "-y", "-i", str(take), "-af", f"atrim=start={start:.3f}:end={end:.3f},asetpts=N/SR/TB",
              "-ar", "48000", str(out)],
             check=True, capture_output=True,
         )
-    logger.info(f"Split {take.name} into {len(outputs)} scenes at {', '.join(f'{c:.2f}s' for c in cuts)}")
+    logger.info(f"Split master take {take.name} into {len(outputs)} scenes at {', '.join(f'{c:.2f}s' for c in cuts)} (total {total:.2f}s)")
     return True
+

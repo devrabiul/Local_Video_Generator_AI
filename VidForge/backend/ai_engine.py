@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -951,6 +952,201 @@ Respond ONLY with valid JSON: {{"headlines": ["...", "...", "...", "...", "..."]
     result = await ollama_json(system_prompt, f"Title: {title}\nAbout: {synopsis}", task="thumbnail headlines")
     return [str(h).strip() for h in (result.get("headlines") or []) if str(h).strip()][:5]
 
+async def generate_thematic_poster_concept(
+    title: str,
+    story_prompt: str,
+    scenes: list[dict],
+    video_type: str = "story",
+    language: str = "bn",
+    character_references: list[dict] | None = None
+) -> dict:
+    """Synthesizes the entire story, characters, and emotional arc into an iconic, theatrical movie poster concept."""
+    target_lang = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["bn"])
+    
+    # Safely parse scenes if passed as JSON string
+    if isinstance(scenes, str):
+        try:
+            scenes = json.loads(scenes)
+        except Exception:
+            scenes = []
+    if not isinstance(scenes, list):
+        scenes = []
+
+    # Compile the full story context from scenes or story_prompt
+    story_narrations = []
+    characters_set = set()
+    for i, s in enumerate(scenes):
+        if not isinstance(s, dict):
+            continue
+        narr = s.get("narration", "").strip()
+        if narr:
+            story_narrations.append(f"Scene {i+1}: {narr}")
+        chars = s.get("characters", [])
+        if isinstance(chars, list):
+            for c in chars:
+                if c and isinstance(c, str):
+                    characters_set.add(c)
+                
+    full_narrative = "\n".join(story_narrations) if story_narrations else story_prompt
+    characters_info = ", ".join(characters_set) if characters_set else "Main story characters"
+    
+    # Safely parse character_references if passed as JSON string
+    if isinstance(character_references, str):
+        try:
+            character_references = json.loads(character_references)
+        except Exception:
+            character_references = []
+    if not isinstance(character_references, list):
+        character_references = []
+
+    char_styling_hint = ""
+    cr_lines = []
+    for cr in character_references:
+        if isinstance(cr, dict) and cr.get("look"):
+            cr_lines.append(f"- {cr.get('name', 'Hero')}: {cr.get('look', '')}")
+    if cr_lines:
+        char_styling_hint = "Featured Characters:\n" + "\n".join(cr_lines)
+
+    system_prompt = f"""You are an award-winning cinematic art director and film poster designer (specialized in Hollywood theatrical key art, Pixar/Disney animation one-sheets, and Criterion collection posters).
+Your mission is to analyze the ENTIRE story below and design a MASTER THEMATIC POSTER that captures the deep soul, core conflict, and emotional heart of the whole video.
+
+A REAL POSTER DOES NOT SIMPLY SHOW A SINGLE RANDOM SCENE OR SCREENSHOT.
+Instead, a real poster:
+1. Synthesizes the full narrative journey, emotional climax, and thematic essence in ONE iconic, visually arresting composition.
+2. Features iconic, symbolic character staging: the central figures posed with expressive chemistry and dynamic hierarchy that encapsulates their relationship.
+3. Uses masterwork visual storytelling: dramatic theatrical lighting, atmospheric depth, rich layered composition (foreground symbolism, striking midground figures, evocative backdrop).
+4. Genre aesthetic: The video type is "{video_type}".
+   - If animation: Pixar/DreamWorks 3D CGI cinematic movie poster key visual, expressive stylized characters, rich tactile textures, magical theatrical rim lighting, vibrant color palette.
+   - If story/historical/drama: Epic theatrical film one-sheet, cinematic chiaroscuro, sweeping atmospheric lighting.
+   - If mystery/thriller: Tense chiaroscuro, moody silhouettes, symbolic clues, deep shadows.
+5. Provides deliberate negative space at the top or bottom for theatrical poster typography.
+6. CRITICAL: NEVER include any text, letters, titles, watermarks, or words inside the "poster_prompt" image description.
+
+Respond ONLY with valid JSON in this exact structure:
+{{
+  "poster_prompt": "English text-to-image prompt describing the grand theatrical poster artwork in vivid detail (composition, subjects, expressions, lighting, colors, style). Do not ask for text.",
+  "tagline": "Evocative, powerful movie poster tagline in {target_lang} (4-8 words capturing the soul/essence of the entire story)",
+  "headline": "Grand theatrical movie title in {target_lang}",
+  "subline": "Cinematic subtitle or credit line in {target_lang}",
+  "theme_summary": "1-sentence English explanation of the core theme and visual metaphor chosen",
+  "recommended_style": "cinematic_gold",
+  "textColor": "#ffffff",
+  "accentColor": "#facc15"
+}}"""
+
+    user_content = f"""Title: {title}
+Video Type: {video_type}
+Characters: {characters_info}
+{char_styling_hint}
+
+Full Narrative:
+{full_narrative[:2500]}"""
+
+    result = await ollama_json(system_prompt, user_content, task="thematic poster concept")
+    return {
+        "poster_prompt": str(result.get("poster_prompt", "")).strip(),
+        "tagline": str(result.get("tagline", "")).strip(),
+        "headline": str(result.get("headline", title)).strip() or title,
+        "subline": str(result.get("subline", "")).strip(),
+        "theme_summary": str(result.get("theme_summary", "")).strip(),
+        "recommended_style": str(result.get("recommended_style", "cinematic_gold")),
+        "textColor": str(result.get("textColor", "#ffffff")),
+        "accentColor": str(result.get("accentColor", "#facc15")),
+    }
+
+async def extract_character_face_features(
+    image_path: Path | str,
+    character_name: str = "",
+    video_type: str = "animation"
+) -> dict:
+    """Analyzes a real person's portrait photo using local vision AI (moondream) and synthesizes
+    an accurate, highly detailed 3D Pixar/Disney cartoon character description preserving their
+    authentic facial features (face structure, eyes, hairstyle, beard, smile, and accessories).
+    """
+    image_path = Path(image_path)
+    if not image_path.exists():
+        logger.warning(f"Character image not found: {image_path}")
+        return {"name": character_name, "look": "", "cartoon_look": "", "features_summary": ""}
+
+    name = character_name.strip() or "Protagonist"
+    img_bytes = image_path.read_bytes()
+    b64_img = base64.b64encode(img_bytes).decode("utf-8")
+
+    raw_face_description = ""
+    # 1. Primary: Use Ollama local vision model (moondream)
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            v_payload = {
+                "model": "moondream:latest",
+                "prompt": (
+                    "Describe this person's facial features in detail: "
+                    "1. Gender and estimated age. "
+                    "2. Skin tone and complexion. "
+                    "3. Face shape (jawline, cheekbones, chin). "
+                    "4. Eyes: eye shape, color, eyelid folds, eyebrow shape and thickness. "
+                    "5. Nose shape and mouth/lips/smile. "
+                    "6. Hair: color, cut/style, parting, length, texture. "
+                    "7. Facial hair: clean-shaven, stubble, mustache, or beard style. "
+                    "8. Glasses, clothing, or distinctive features. Be very specific."
+                ),
+                "images": [b64_img],
+                "stream": False
+            }
+            res = await client.post(f"{OLLAMA_URL}/api/generate", json=v_payload)
+            if res.status_code == 200:
+                raw_face_description = res.json().get("response", "").strip()
+                logger.info(f"Ollama vision face extraction succeeded: {raw_face_description[:120]}...")
+    except Exception as e:
+        logger.warning(f"Ollama vision face extraction failed: {e}")
+
+    # 2. Synthesize into high-fidelity Pixar/Disney 3D animation character specification
+    system_prompt = f"""You are a senior lead character designer at Pixar Animation Studios and Walt Disney Animation.
+Your task is to take facial analysis observations of a real person and generate a 3D animated character visual description that:
+1. FAITHFULLY AND ACCURATELY CAPTURES THIS SPECIFIC PERSON'S UNMISTAKABLE FACIAL LIKENESS.
+2. The generated cartoon character MUST have:
+   - Their exact face structure (jaw, chin, cheek fullness, face shape)
+   - Their exact skin tone & complexion
+   - Their exact hairstyle, hairline, parting, hair texture, and color
+   - Their exact eyes: eye shape, iris color, eyebrow shape and thickness
+   - Their exact facial hair (exact beard/mustache shape or clean-shaven)
+   - Their exact glasses or distinctive facial marks
+3. Translates their real features into an appealing, expressive Pixar/Disney 3D CGI stylized animation aesthetic.
+4. Output MUST be in English.
+
+Respond ONLY with valid JSON in this structure:
+{{
+  "character_name": "{name}",
+  "features_summary": "1 concise sentence summarizing the person's key facial features (e.g. Young South Asian man, neat black side-parted hair, rectangular glasses, trimmed goatee beard, warm smile)",
+  "facial_structure": "detailed description of face shape, jawline, cheeks, chin",
+  "hair_and_facial_hair": "detailed description of hair cut, part, texture, and facial hair",
+  "eyes_and_expression": "detailed description of eyes, brows, expression",
+  "cartoon_look": "Complete Pixar/Disney 3D animated CGI feature film character prompt describing {name}'s exact stylized facial likeness, hair, skin, eyes, facial hair, and clothing in rich detail. Emphasize 'unmistakable facial likeness of {name}'."
+}}"""
+
+    user_content = f"Character Name: {name}\n\nObserved Facial Features from Photo:\n{raw_face_description if raw_face_description else 'A real person whose portrait is provided.'}"
+
+    try:
+        res = await ollama_json(system_prompt, user_content, task="character face synthesis")
+        cartoon_look = res.get("cartoon_look", "").strip()
+        summary = res.get("features_summary", "").strip()
+        look = cartoon_look if cartoon_look else f"3D animated CGI Pixar/Disney style rendition of {name}, featuring authentic facial likeness, stylized hair, expressive eyes, smooth 3D render textures"
+        return {
+            "name": name,
+            "look": look,
+            "cartoon_look": cartoon_look,
+            "features_summary": summary,
+            "raw_analysis": raw_face_description
+        }
+    except Exception as e:
+        logger.error(f"Failed to synthesize character cartoon look: {e}")
+        return {
+            "name": name,
+            "look": f"3D animated CGI Pixar/Disney style rendition of {name}, featuring authentic facial likeness, styled hair, expressive eyes, smooth 3D render textures",
+            "cartoon_look": "",
+            "features_summary": "",
+            "raw_analysis": raw_face_description
+        }
+
 def get_audio_duration(audio_path: Path) -> float:
     cmd = [
         FFPROBE, "-v", "error", "-show_entries", "format=duration",
@@ -991,6 +1187,12 @@ async def generate_scene_image(visual_prompt: str, aspect: str, output_path: Pat
         title = node.get("_meta", {}).get("title")
         if title == "VF_PROMPT":
             node["inputs"]["text"] = visual_prompt
+        elif title in ("VF_NEG", "VF_NEGATIVE"):
+            is_animation = any(w in visual_prompt.lower() for w in ("animation", "animated", "cartoon", "pixar", "disney", "3d cgi", "3d animated"))
+            if is_animation:
+                node["inputs"]["text"] = "blurry, low quality, distorted, extra limbs, bad anatomy, deformed, ugly face, mismatched facial features, photorealistic real human photo, grainy, text, watermark"
+            else:
+                node["inputs"]["text"] = "blurry, low quality, distorted, extra limbs, bad anatomy, deformed, ugly, cartoon, 3d render, illustration, anime, text, watermark"
         elif title == "VF_LATENT":
             node["inputs"]["width"] = dims["width"]
             node["inputs"]["height"] = dims["height"]

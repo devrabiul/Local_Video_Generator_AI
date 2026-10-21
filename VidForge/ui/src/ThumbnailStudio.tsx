@@ -9,11 +9,11 @@ export interface StudioProject {
   title: string;
   aspect_ratio: string;
   thumbnail_design?: string;
-  scenes?: { visual_prompt: string; image_url?: string }[];
+  scenes?: { visual_prompt: string; image_url?: string; narration?: string }[];
 }
 
 type Format = "16:9" | "9:16";
-type TextStyle = "outline" | "box" | "shadow";
+type TextStyle = "poster" | "outline" | "box" | "shadow";
 type Position = "top" | "center" | "bottom";
 type Align = "left" | "center" | "right";
 
@@ -22,6 +22,7 @@ interface ThumbDesign {
   background: string;  // server path such as /jobs/<id>/image_x.png
   prompt: string;      // last AI background prompt, kept for further refinement
   headline: string;
+  tagline: string;     // evocative movie poster tagline
   subline: string;
   fontSize: number;    // headline size as % of canvas width
   textColor: string;
@@ -30,6 +31,7 @@ interface ThumbDesign {
   position: Position;
   align: Align;
   shade: number;       // 0-90, darkening behind the text
+  thematicSummary?: string;
 }
 
 const CANVAS_SIZE: Record<Format, { w: number; h: number }> = {
@@ -57,14 +59,16 @@ function defaultDesign(project: StudioProject): ThumbDesign {
     background: scenes.find(s => s.image_url)?.image_url || "",
     prompt: scenes[0]?.visual_prompt ? scenes[0].visual_prompt + THUMB_PROMPT_SUFFIX : "",
     headline: project.title,
+    tagline: "",
     subline: "",
-    fontSize: 9,
+    fontSize: 8.5,
     textColor: "#ffffff",
     accentColor: "#facc15",
-    textStyle: "outline",
+    textStyle: "poster",
     position: "bottom",
     align: "center",
-    shade: 55,
+    shade: 60,
+    thematicSummary: "",
   };
 }
 
@@ -121,9 +125,33 @@ function drawThumbnail(canvas: HTMLCanvasElement, d: ThumbDesign, img: HTMLImage
     ctx.drawImage(img, (w - iw) / 2, (h - ih) / 2, iw, ih);
   }
 
+  // Theatrical cinematic film vignette
+  if (d.textStyle === "poster") {
+    // Top film vignette
+    const topGrad = ctx.createLinearGradient(0, 0, 0, h * 0.32);
+    topGrad.addColorStop(0, "rgba(0, 0, 0, 0.72)");
+    topGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = topGrad;
+    ctx.fillRect(0, 0, w, h * 0.32);
+
+    // Bottom theatrical gradient
+    const botGrad = ctx.createLinearGradient(0, h * 0.48, 0, h);
+    botGrad.addColorStop(0, "rgba(0, 0, 0, 0)");
+    botGrad.addColorStop(1, "rgba(0, 0, 0, 0.88)");
+    ctx.fillStyle = botGrad;
+    ctx.fillRect(0, h * 0.48, w, h * 0.52);
+
+    // Subtle edge radial vignette
+    const radGrad = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.45, w / 2, h / 2, Math.max(w, h) * 0.8);
+    radGrad.addColorStop(0, "rgba(0, 0, 0, 0)");
+    radGrad.addColorStop(1, "rgba(0, 0, 0, 0.45)");
+    ctx.fillStyle = radGrad;
+    ctx.fillRect(0, 0, w, h);
+  }
+
   // Darken the side of the frame that carries the text so it stays readable
   const shade = d.shade / 100;
-  if (shade > 0) {
+  if (shade > 0 && d.textStyle !== "poster") {
     let grad: CanvasGradient;
     if (d.position === "top") grad = ctx.createLinearGradient(0, 0, 0, h * 0.65);
     else if (d.position === "bottom") grad = ctx.createLinearGradient(0, h, 0, h * 0.35);
@@ -137,16 +165,26 @@ function drawThumbnail(canvas: HTMLCanvasElement, d: ThumbDesign, img: HTMLImage
   const pad = w * 0.06;
   const maxWidth = w - pad * 2;
   const headPx = Math.round(w * d.fontSize / 100);
-  const subPx = Math.round(headPx * 0.42);
+  const tagPx = Math.max(16, Math.round(headPx * 0.36));
+  const subPx = Math.max(15, Math.round(headPx * 0.38));
+
   ctx.font = `800 ${headPx}px ${FONT_STACK}`;
   const headLines = d.headline.trim() ? wrapLines(ctx, d.headline.trim(), maxWidth) : [];
+
+  ctx.font = `600 ${tagPx}px ${FONT_STACK}`;
+  const tagLines = (d.tagline || "").trim() ? wrapLines(ctx, (d.tagline || "").trim(), maxWidth) : [];
+
   ctx.font = `700 ${subPx}px ${FONT_STACK}`;
   const subLines = d.subline.trim() ? wrapLines(ctx, d.subline.trim(), maxWidth) : [];
 
   const headLH = headPx * 1.18;
-  const subLH = subPx * 1.3;
-  const gap = headLines.length && subLines.length ? subPx * 0.6 : 0;
-  const blockH = headLines.length * headLH + gap + subLines.length * subLH;
+  const tagLH = tagPx * 1.35;
+  const subLH = subPx * 1.35;
+
+  const tagGap = tagLines.length ? tagPx * 0.6 : 0;
+  const subGap = subLines.length ? subPx * 0.6 : 0;
+
+  const blockH = (tagLines.length * tagLH) + tagGap + (headLines.length * headLH) + subGap + (subLines.length * subLH);
   let y = d.position === "top" ? pad : d.position === "bottom" ? h - pad - blockH : (h - blockH) / 2;
 
   const x = d.align === "left" ? pad : d.align === "right" ? w - pad : w / 2;
@@ -154,44 +192,83 @@ function drawThumbnail(canvas: HTMLCanvasElement, d: ThumbDesign, img: HTMLImage
   ctx.textBaseline = "top";
   ctx.lineJoin = "round";
 
-  // Headline: text color (on an accent box in "box" style). Sub-headline: accent color (on a dark box).
-  const drawLine = (text: string, role: "head" | "sub") => {
-    const px = role === "head" ? headPx : subPx;
-    const lh = role === "head" ? headLH : subLH;
-    const color = role === "head" ? d.textColor : d.accentColor;
-    ctx.font = `${role === "head" ? 800 : 700} ${px}px ${FONT_STACK}`;
-    const ty = y + (lh - px) / 2;
+  // 1. Draw Tagline (if present, placed gracefully above the main headline)
+  if (tagLines.length) {
+    ctx.font = `600 ${tagPx}px ${FONT_STACK}`;
+    for (const line of tagLines) {
+      const ty = y + (tagLH - tagPx) / 2;
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.95)";
+      ctx.shadowBlur = tagPx * 0.4;
+      ctx.shadowOffsetY = tagPx * 0.1;
+      ctx.fillStyle = d.accentColor;
+      ctx.fillText(line, x, ty);
+      ctx.restore();
+      y += tagLH;
+    }
+    y += tagGap;
+  }
+
+  // 2. Draw Headline
+  const drawHeadlineLine = (text: string) => {
+    ctx.font = `800 ${headPx}px ${FONT_STACK}`;
+    const ty = y + (headLH - headPx) / 2;
     ctx.save();
     if (d.textStyle === "box") {
       const tw = ctx.measureText(text).width;
       const bx = d.align === "left" ? x : d.align === "right" ? x - tw : x - tw / 2;
-      const padX = px * 0.28;
-      ctx.fillStyle = role === "head" ? d.accentColor : "rgba(0,0,0,0.75)";
+      const padX = headPx * 0.28;
+      ctx.fillStyle = d.accentColor;
       ctx.beginPath();
-      ctx.roundRect(bx - padX, y + lh * 0.04, tw + padX * 2, lh * 0.94, px * 0.14);
+      ctx.roundRect(bx - padX, y + headLH * 0.04, tw + padX * 2, headLH * 0.94, headPx * 0.14);
       ctx.fill();
-      ctx.fillStyle = role === "head" && d.textColor === d.accentColor ? "#111827" : color;
+      ctx.fillStyle = d.textColor === d.accentColor ? "#111827" : d.textColor;
+      ctx.fillText(text, x, ty);
+    } else if (d.textStyle === "poster") {
+      // Theatrical multi-pass drop shadow + rim stroke for movie poster look
+      ctx.shadowColor = "rgba(0,0,0,0.95)";
+      ctx.shadowBlur = headPx * 0.45;
+      ctx.shadowOffsetY = headPx * 0.08;
+      ctx.strokeStyle = "rgba(0,0,0,0.85)";
+      ctx.lineWidth = Math.max(4, headPx * 0.12);
+      ctx.strokeText(text, x, ty);
+      ctx.fillStyle = d.textColor;
+      ctx.fillText(text, x, ty);
+    } else if (d.textStyle === "shadow") {
+      ctx.shadowColor = "rgba(0,0,0,0.85)";
+      ctx.shadowBlur = headPx * 0.35;
+      ctx.shadowOffsetY = headPx * 0.06;
+      ctx.fillStyle = d.textColor;
       ctx.fillText(text, x, ty);
     } else {
-      if (d.textStyle === "shadow") {
-        ctx.shadowColor = "rgba(0,0,0,0.85)";
-        ctx.shadowBlur = px * 0.35;
-        ctx.shadowOffsetY = px * 0.06;
-      } else {
-        ctx.strokeStyle = "#000000";
-        ctx.lineWidth = Math.max(4, px * 0.14);
-        ctx.strokeText(text, x, ty);
-      }
-      ctx.fillStyle = color;
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = Math.max(4, headPx * 0.14);
+      ctx.strokeText(text, x, ty);
+      ctx.fillStyle = d.textColor;
       ctx.fillText(text, x, ty);
     }
     ctx.restore();
-    y += lh;
+    y += headLH;
   };
 
-  headLines.forEach(line => drawLine(line, "head"));
-  y += gap;
-  subLines.forEach(line => drawLine(line, "sub"));
+  headLines.forEach(line => drawHeadlineLine(line));
+
+  // 3. Draw Subline
+  if (subLines.length) {
+    y += subGap;
+    ctx.font = `700 ${subPx}px ${FONT_STACK}`;
+    for (const line of subLines) {
+      const ty = y + (subLH - subPx) / 2;
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.85)";
+      ctx.shadowBlur = subPx * 0.35;
+      ctx.shadowOffsetY = subPx * 0.06;
+      ctx.fillStyle = d.accentColor;
+      ctx.fillText(line, x, ty);
+      ctx.restore();
+      y += subLH;
+    }
+  }
 }
 
 interface Props {
@@ -207,8 +284,9 @@ export default function ThumbnailStudio({ apiBase, project, onClose, onSaved }: 
   const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
   const [bgError, setBgError] = useState<string | null>(null);
   const [instruction, setInstruction] = useState("");
-  const [aiBusy, setAiBusy] = useState<"generate" | "refine" | "headlines" | null>(null);
+  const [aiBusy, setAiBusy] = useState<"generate" | "refine" | "headlines" | "thematic_poster" | null>(null);
   const [headlineIdeas, setHeadlineIdeas] = useState<string[]>([]);
+  const [thematicSummary, setThematicSummary] = useState(design.thematicSummary || "");
   const [error, setError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -252,16 +330,48 @@ export default function ThumbnailStudio({ apiBase, project, onClose, onSaved }: 
     const canvas = canvasRef.current;
     if (!canvas) return;
     let cancelled = false;
-    const text = `${design.headline} ${design.subline}`;
+    const text = `${design.headline} ${design.tagline || ""} ${design.subline}`;
     // Wait for the web fonts so Bengali glyphs aren't drawn with a fallback face
     Promise.all([
       document.fonts.load(`800 40px ${FONT_STACK}`, text),
       document.fonts.load(`700 40px ${FONT_STACK}`, text),
+      document.fonts.load(`600 40px ${FONT_STACK}`, text),
     ]).catch(() => undefined).then(() => {
       if (!cancelled) drawThumbnail(canvas, design, bgImage);
     });
     return () => { cancelled = true; };
   }, [design, bgImage]);
+
+  const generateThematicPoster = async () => {
+    setAiBusy("thematic_poster");
+    setError(null);
+    try {
+      const res = await fetch(`${apiBase}/api/jobs/${project.id}/poster/generate`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Could not generate thematic poster");
+      
+      setSavedBackgrounds(prev => [data.url, ...prev]);
+      setThematicSummary(data.theme_summary || "");
+      set({
+        background: data.url,
+        prompt: data.prompt,
+        headline: data.headline || design.headline,
+        tagline: data.tagline || "",
+        subline: data.subline || "",
+        thematicSummary: data.theme_summary || "",
+        textStyle: "poster",
+        textColor: data.textColor || "#ffffff",
+        accentColor: data.accentColor || "#facc15",
+        shade: 60,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Thematic poster generation failed");
+    } finally {
+      setAiBusy(null);
+    }
+  };
 
   const requestBackground = async (mode: "generate" | "refine") => {
     setAiBusy(mode);
@@ -384,7 +494,7 @@ export default function ThumbnailStudio({ apiBase, project, onClose, onSaved }: 
           <div className="studio-head-title">
             <span className="studio-head-icon"><ImageIcon size={17} /></span>
             <div>
-              <h3>Thumbnail Studio</h3>
+              <h3>Thematic Poster &amp; Thumbnail Studio</h3>
               <p title={project.title}>{project.title}</p>
             </div>
           </div>
@@ -402,15 +512,45 @@ export default function ThumbnailStudio({ apiBase, project, onClose, onSaved }: 
             <div className="segmented" role="group" aria-label="Thumbnail format">
               {(["16:9", "9:16"] as Format[]).map(f => (
                 <button key={f} type="button" className={`segmented-btn ${design.format === f ? 'active' : ''}`} onClick={() => set({ format: f })}>
-                  {f === "16:9" ? "16:9 · YouTube" : "9:16 · Shorts / Reels"}
+                  {f === "16:9" ? "16:9 · YouTube / Landscape Poster" : "9:16 · Shorts / Vertical Poster"}
                 </button>
               ))}
             </div>
           </div>
 
           <div className="thumb-controls">
+            {/* Thematic Master Poster Section */}
+            <section className="studio-section studio-thematic-card">
+              <div className="thematic-card-header">
+                <span className="thematic-badge"><Sparkles size={12} /> Core Theme Synthesizer</span>
+                <h4>Thematic Movie Poster Generator</h4>
+                <p>
+                  Instead of copying a single scene frame with text, the AI analyzes the entire story arc, characters, and core theme to paint an iconic cinematic master poster.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-primary btn-thematic"
+                onClick={generateThematicPoster}
+                disabled={!!aiBusy}
+              >
+                {aiBusy === "thematic_poster" ? (
+                  <><RefreshCw size={14} className="animate-spin" /> Synthesizing theme &amp; painting poster…</>
+                ) : (
+                  <><Wand2 size={14} /> Generate Thematic Film Poster</>
+                )}
+              </button>
+
+              {thematicSummary && (
+                <div className="thematic-summary-chip">
+                  <strong>Core Theme:</strong> {thematicSummary}
+                </div>
+              )}
+            </section>
+
             <section className="studio-section">
-              <div className="studio-section-title">Background</div>
+              <div className="studio-section-title">Background Art</div>
               {sceneBackgrounds.length + savedBackgrounds.length > 0 ? (
                 <div className="thumb-bg-grid">
                   {[...savedBackgrounds, ...sceneBackgrounds].map(backgroundTile)}
@@ -431,8 +571,8 @@ export default function ThumbnailStudio({ apiBase, project, onClose, onSaved }: 
             </section>
 
             <section className="studio-section">
-              <div className="studio-section-title">AI background</div>
-              <label className="studio-label" htmlFor="thumb-prompt">Image prompt</label>
+              <div className="studio-section-title">Custom AI Key Art</div>
+              <label className="studio-label" htmlFor="thumb-prompt">Art prompt</label>
               <textarea
                 id="thumb-prompt"
                 rows={3}
@@ -441,7 +581,7 @@ export default function ThumbnailStudio({ apiBase, project, onClose, onSaved }: 
                 placeholder="Describe the image you want behind the headline"
               />
               <button type="button" className="btn btn-primary" onClick={() => requestBackground("generate")} disabled={!!aiBusy || !design.prompt.trim()}>
-                {aiBusy === "generate" ? <><RefreshCw size={14} className="animate-spin" /> Generating…</> : <><Sparkles size={14} /> {savedBackgrounds.length ? "Regenerate" : "Generate"} background</>}
+                {aiBusy === "generate" ? <><RefreshCw size={14} className="animate-spin" /> Generating…</> : <><Sparkles size={14} /> {savedBackgrounds.length ? "Regenerate" : "Generate"} art</>}
               </button>
 
               <label className="studio-label" htmlFor="thumb-refine">Not quite right? Describe the change</label>
@@ -451,7 +591,7 @@ export default function ThumbnailStudio({ apiBase, project, onClose, onSaved }: 
                   value={instruction}
                   onChange={e => setInstruction(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter" && instruction.trim() && !aiBusy) requestBackground("refine"); }}
-                  placeholder="e.g. make the sky stormy and add a castle"
+                  placeholder="e.g. make the lighting more dramatic and add golden rim light"
                 />
                 <button type="button" className="btn btn-secondary-soft" onClick={() => requestBackground("refine")} disabled={!!aiBusy || !instruction.trim()}>
                   {aiBusy === "refine" ? <RefreshCw size={14} className="animate-spin" /> : <Wand2 size={14} />} Refine
@@ -468,10 +608,19 @@ export default function ThumbnailStudio({ apiBase, project, onClose, onSaved }: 
             </section>
 
             <section className="studio-section">
-              <div className="studio-section-title">Text</div>
-              <label className="studio-label" htmlFor="thumb-headline">Headline</label>
+              <div className="studio-section-title">Typography &amp; Layout</div>
+              
+              <label className="studio-label" htmlFor="thumb-tagline">Movie Tagline (Core Theme)</label>
+              <input
+                id="thumb-tagline"
+                value={design.tagline || ""}
+                onChange={e => set({ tagline: e.target.value })}
+                placeholder="Evocative tagline capturing the soul of the story"
+              />
+
+              <label className="studio-label" htmlFor="thumb-headline">Poster Title / Headline</label>
               <div className="studio-inline">
-                <textarea id="thumb-headline" rows={2} value={design.headline} onChange={e => set({ headline: e.target.value })} placeholder="Big, short, curiosity-driven" />
+                <textarea id="thumb-headline" rows={2} value={design.headline} onChange={e => set({ headline: e.target.value })} placeholder="Grand theatrical title" />
                 <button type="button" className="btn btn-ghost" onClick={suggestHeadlines} disabled={!!aiBusy} title="Suggest headlines with AI">
                   {aiBusy === "headlines" ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={14} />} Suggest
                 </button>
@@ -483,15 +632,18 @@ export default function ThumbnailStudio({ apiBase, project, onClose, onSaved }: 
                   ))}
                 </div>
               )}
-              <label className="studio-label" htmlFor="thumb-subline">Sub-headline (optional)</label>
-              <input id="thumb-subline" value={design.subline} onChange={e => set({ subline: e.target.value })} placeholder="e.g. PART 1 · The untold story" />
+              
+              <label className="studio-label" htmlFor="thumb-subline">Subtitle / Credit Line (optional)</label>
+              <input id="thumb-subline" value={design.subline} onChange={e => set({ subline: e.target.value })} placeholder="e.g. A Tale of Friendship and Mystery" />
 
               <div className="studio-grid-2">
                 <div>
-                  <span className="studio-label">Style</span>
+                  <span className="studio-label">Layout Style</span>
                   <div className="segmented" role="group" aria-label="Text style">
-                    {(["outline", "box", "shadow"] as TextStyle[]).map(s => (
-                      <button key={s} type="button" className={`segmented-btn ${design.textStyle === s ? 'active' : ''}`} onClick={() => set({ textStyle: s })}>{s[0].toUpperCase() + s.slice(1)}</button>
+                    {(["poster", "outline", "box", "shadow"] as TextStyle[]).map(s => (
+                      <button key={s} type="button" className={`segmented-btn ${design.textStyle === s ? 'active' : ''}`} onClick={() => set({ textStyle: s })}>
+                        {s === "poster" ? "Cinematic" : s[0].toUpperCase() + s.slice(1)}
+                      </button>
                     ))}
                   </div>
                 </div>

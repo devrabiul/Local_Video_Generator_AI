@@ -72,8 +72,14 @@ async def process_job(job: dict):
                 scenes = []
 
         if not scenes:
-            if script_mode == "direct":
-                update_job_status(job_id, status="SCRIPTING", progress=10, current_step="Building visual scenes from exact script (No AI rewriting)...")
+            raw_parsed = ai_engine.parse_direct_script_raw(job["story_prompt"])
+            is_formatted_script = bool(
+                raw_parsed and len(raw_parsed) > 1 and any(
+                    re.search(r'Scene|দৃশ্য|Narration|ভয়েসওভার|Dialogue|সংবাদ', job["story_prompt"], re.I)
+                )
+            )
+            if script_mode == "direct" or is_formatted_script:
+                update_job_status(job_id, status="SCRIPTING", progress=10, current_step="Building visual scenes from exact script (Preserving full dialogue)...")
                 scenes = await ai_engine.build_scenes_from_direct_script(
                     prompt=job["story_prompt"],
                     language=job["language"]
@@ -86,6 +92,26 @@ async def process_job(job: dict):
                         char_refs = json.loads(job["character_references"])
                     except Exception:
                         char_refs = []
+                
+                # If characters have an uploaded photo but no detailed look, extract facial likeness now
+                if char_refs:
+                    for cr in char_refs:
+                        if isinstance(cr, dict) and cr.get("image_url") and not cr.get("look"):
+                            rel = str(cr["image_url"]).lstrip("/").replace("jobs/", "", 1)
+                            local_img = projects.JOBS_DIR / rel
+                            if local_img.exists():
+                                logger.info(f"Extracting facial features for character '{cr.get('name')}' from {local_img}...")
+                                try:
+                                    analysis = await ai_engine.extract_character_face_features(
+                                        image_path=local_img,
+                                        character_name=cr.get("name", "Protagonist"),
+                                        video_type=video_type
+                                    )
+                                    if analysis.get("look"):
+                                        cr["look"] = analysis["look"]
+                                except Exception as e:
+                                    logger.warning(f"Could not extract face features for {cr.get('name')}: {e}")
+
                 step_title = f"Generating {video_type.title()} script with {len(char_refs)} custom character(s) (~{target_duration}s)..." if char_refs else f"Generating {video_type.title()} script (~{target_duration}s)..."
                 update_job_status(job_id, status="SCRIPTING", progress=10, current_step=step_title)
                 plan = await ai_engine.plan_script(
@@ -112,7 +138,7 @@ async def process_job(job: dict):
         _checkpoint(job_id)
         update_job_status(job_id, status="SCRIPTING", progress=25, current_step=f"Ready with {len(scenes)} scenes: {title}", scenes_json=json.dumps(scenes, ensure_ascii=False))
 
-        # Step 2: Voiceover generation (Gemini / ElevenLabs / F5-TTS)
+        # Step 2: Voiceover generation (Audio-First continuous narration)
         voice_label = job.get("voice", "neural")
         update_job_status(job_id, status="VOICEOVER", progress=30, current_step=f"Generating voiceover using {voice_label}...")
         engine, voice_name = tts_engine.split_voice(job["voice"])
@@ -128,22 +154,22 @@ async def process_job(job: dict):
                 pause = 0.0
             return max(0.0, min(pause, 1.0))
 
-        # Continuous engines voice the story in one performance, so every scene's audio depends on the whole script
-        continuous = engine in tts_engine.CONTINUOUS_ENGINES
-        story_key = _asset_key([sc["narration"] for sc in scenes], narrator_style, job["voice"], job["language"]) if continuous else ""
+        # Audio-First: voice the entire story in continuous master takes first
+        continuous = True
+        story_key = _asset_key([sc["narration"] for sc in scenes], narrator_style, job["voice"], job["language"])
         audio_paths = []
         for i, sc in enumerate(scenes):
             parts = [sc["narration"], sc.get("delivery", ""), narrator_style, job["voice"], job["language"], round(_pause(i, sc), 2)]
             if engine in tts_engine.BATCH_ENGINES:
                 parts.append(tts_engine.get_local_tts_model())  # switching the local model re-voices the story
-            key = _asset_key(*parts, story_key) if continuous else _asset_key(*parts)
+            key = _asset_key(*parts, story_key)
             audio_paths.append(work_dir / f"audio_{key}.mp3")
 
         async def _on_voice_status(msg: str, progress: int = 32):
             _checkpoint(job_id)
             update_job_status(job_id, status="VOICEOVER", progress=progress, current_step=msg)
 
-        async def _finish_scene_audio(i: int, raw: Path, is_split_from_continuous: bool = False):
+        async def _finish_scene_audio(i: int, raw: Path, is_split_from_continuous: bool = True):
             if audio_paths[i].exists():
                 raw.unlink(missing_ok=True)
                 return
@@ -158,18 +184,16 @@ async def process_job(job: dict):
             raw.unlink(missing_ok=True)
 
         missing = [i for i, p in enumerate(audio_paths) if not p.exists()]
-        voice_separately = missing
-        if continuous and missing:
-            # Re-voice the whole story so the performance stays continuous, even if only one scene changed
-            voice_separately = []
+        if missing:
+            # Voice the entire story into a single master audio recording first
             texts = [sc["narration"] for sc in scenes]
             takes = narration.group_into_takes(texts)
             for t, idxs in enumerate(takes):
                 _checkpoint(job_id)
                 progress = 30 + int((t / len(takes)) * 14)
-                label = f"take {t + 1}/{len(takes)}" if len(takes) > 1 else "one continuous take"
-                await _on_voice_status(f"Voicing the story as {label} (scenes {idxs[0] + 1}-{idxs[-1] + 1})...", progress)
-                take_path = work_dir / f"tmp_take_{story_key}_{t}.wav"
+                label = f"part {t + 1}/{len(takes)}" if len(takes) > 1 else "master continuous audio"
+                await _on_voice_status(f"Recording master continuous audio ({label})...", progress)
+                take_path = work_dir / f"master_audio_take_{story_key}_{t}.wav"
                 raws = [work_dir / f"tmp_scene_{story_key}_{i}.wav" for i in idxs]
                 await tts_engine.generate_story_take(
                     [texts[i] for i in idxs], job["voice"], take_path,
@@ -177,14 +201,18 @@ async def process_job(job: dict):
                     on_status=lambda m: _on_voice_status(m, progress),
                     language=job.get("language", ""),
                 )
-                ok = await asyncio.to_thread(narration.split_take, take_path, [texts[i] for i in idxs], raws)
+                await asyncio.to_thread(narration.split_take, take_path, [texts[i] for i in idxs], raws)
+                for i, raw in zip(idxs, raws):
+                    await _finish_scene_audio(i, raw, is_split_from_continuous=True)
+                master_story_file = work_dir / f"master_story_audio_{t}.wav"
+                try:
+                    if take_path.exists():
+                        shutil.copy(take_path, master_story_file)
+                except Exception:
+                    pass
                 take_path.unlink(missing_ok=True)
-                if ok:
-                    for i, raw in zip(idxs, raws):
-                        await _finish_scene_audio(i, raw, is_split_from_continuous=True)
-                else:
-                    voice_separately += idxs
 
+        voice_separately = [i for i, p in enumerate(audio_paths) if not p.exists()]
         if engine in tts_engine.BATCH_ENGINES and voice_separately:
             # Local cloning: one model load, one reference, one seed for every scene → one consistent voice
             # Deduplicate targets so identical narration lines are only voiced and processed once
