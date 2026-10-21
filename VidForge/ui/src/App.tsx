@@ -14,6 +14,7 @@ import ThumbnailStudio from './ThumbnailStudio';
 import ProjectReviseDialog from './ProjectReviseDialog';
 import WorkflowPage from './WorkflowPage';
 import { toast, Toaster } from './Toast';
+import { LoadMeter, LoadDot, optionLoad } from './LoadMeter';
 
 interface Scene {
   id: number;
@@ -71,6 +72,9 @@ interface SystemStatus {
   platform?: string;
   wan_available?: boolean;
   video_encoder?: string;
+  gpu_name?: string;
+  vram_used_gb?: number | null;
+  vram_total_gb?: number | null;
 }
 
 const API_BASE = typeof window !== 'undefined' && window.location.port === "8700" ? "" : "http://127.0.0.1:8700";
@@ -1322,23 +1326,38 @@ export default function App() {
           <span className="brand-badge">PRO v1.0</span>
         </a>
 
-        {/* Engine stack (center) */}
-        <div className="header-stack" aria-label="Active engines">
-          <span className="header-stack-item"><span className="header-stack-dot" />RTX 5070 Ti</span>
-          <span className="header-stack-item"><span className="header-stack-dot" />Gemini TTS</span>
-          <span className="header-stack-item"><span className="header-stack-dot" />F5-TTS</span>
-          <span className="header-stack-item"><span className="header-stack-dot" />Wan 2.1</span>
+        {/* Right: queue status (only while there is work) + theme toggle in one box */}
+        <div className="header-tools">
+          {(activeJob || queuedJobs.length > 0) && (
+            <button
+              type="button"
+              className={`header-queue ${activeJob ? 'busy' : ''}`}
+              onClick={() => switchTab('production')}
+              title="Open the production queue"
+            >
+              <span className="header-queue-dot" />
+              {activeJob ? (
+                <>
+                  <span className="header-queue-title">Rendering “{activeJob.title}”</span>
+                  <span className="header-queue-bar"><span style={{ width: `${activeJob.progress}%` }} /></span>
+                  <strong>{activeJob.progress}%</strong>
+                </>
+              ) : (
+                <span>Starting next job…</span>
+              )}
+              {queuedJobs.length > 0 && <span className="header-queue-meta">· {queuedJobs.length} queued</span>}
+            </button>
+          )}
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={toggleTheme}
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            title={theme === "dark" ? "Light mode" : "Dark mode"}
+          >
+            {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
         </div>
-
-        <button
-          type="button"
-          className="theme-toggle"
-          onClick={toggleTheme}
-          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          title={theme === "dark" ? "Light mode" : "Dark mode"}
-        >
-          {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
-        </button>
       </header>
 
       {/* Floating Vertical Navigation Dock (Left Side) */}
@@ -1471,7 +1490,7 @@ export default function App() {
                           aria-pressed={targetDuration === p.sec}
                           onClick={() => setTargetDuration(p.sec)}
                         >
-                          <strong>{p.label}</strong>
+                          <strong>{p.label} <LoadDot level={optionLoad.duration(p.sec)} /></strong>
                           <span>{p.desc}</span>
                         </button>
                       ))}
@@ -1506,6 +1525,7 @@ export default function App() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
                       <span style={{ fontSize: 13 }}>🌟</span>
                       <strong style={{ fontSize: 11.5, color: motionMode === 'kenburns' ? 'var(--a-purple)' : 'var(--t-strong)' }}>Ultra HD Ken Burns</strong>
+                      <LoadDot level={optionLoad.motion('kenburns')} />
                       <span style={{ fontSize: 9, background: 'rgb(34 197 94 / calc(0.2 * var(--tint)))', color: 'var(--a-green-bright)', padding: '1px 4px', borderRadius: 4, fontWeight: 700 }}>প্রস্তাবিত</span>
                     </div>
                     <div style={{ fontSize: 9.5, color: 'var(--t-muted)', lineHeight: 1.3 }}>
@@ -1529,6 +1549,7 @@ export default function App() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
                       <span style={{ fontSize: 13 }}>🤖</span>
                       <strong style={{ fontSize: 11.5, color: motionMode === 'wan' ? 'var(--a-blue)' : 'var(--t-strong)' }}>Wan 2.1 AI Motion</strong>
+                      <LoadDot level={optionLoad.motion('wan')} />
                       <span style={{ fontSize: 9, background: 'rgb(234 179 8 / calc(0.2 * var(--tint)))', color: 'var(--a-yellow)', padding: '1px 4px', borderRadius: 4, fontWeight: 700 }}>পরীক্ষামূলক</span>
                     </div>
                     <div style={{ fontSize: 9.5, color: 'var(--t-muted)', lineHeight: 1.3 }}>
@@ -1683,7 +1704,7 @@ export default function App() {
                           fontWeight: 700
                         }}
                       >
-                        <div>{opt.label}</div>
+                        <div>{opt.label} <LoadDot level={optionLoad.voice(opt.id)} /></div>
                         <div style={{ fontSize: 10, opacity: 'var(--sub-label-opacity)', fontWeight: 500, marginTop: 2 }}>{opt.sub}</div>
                       </button>
                     ))}
@@ -1859,7 +1880,7 @@ export default function App() {
                           className={`segmented-btn ${resolution === r ? 'active' : ''}`}
                           onClick={() => setResolution(r)}
                         >
-                          {r}p
+                          {r}p <LoadDot level={optionLoad.resolution(r)} />
                         </button>
                       ))}
                     </div>
@@ -1883,7 +1904,7 @@ export default function App() {
                           className={`segmented-btn ${fps === f ? 'active' : ''}`}
                           onClick={() => setFps(f)}
                         >
-                          {f}
+                          {f} <LoadDot level={optionLoad.fps(f)} />
                         </button>
                       ))}
                     </div>
@@ -1953,8 +1974,14 @@ export default function App() {
             </section>
 
             {/* Right Panel: Live Worker Monitor & Queue */}
-            <section style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              
+            <section className="production-side">
+
+              {/* Live system-load estimate for the options chosen in the form */}
+              <LoadMeter
+                options={{ duration: targetDuration, motion: motionMode, resolution, fps, voice: ttsEngine, subtitles: enableSubtitles }}
+                vramTotalGb={systemStatus.vram_total_gb}
+              />
+
               {/* Video-ready prompt: next steps for the project that just finished */}
               {justFinishedJob && (
                 <div className="glass-panel ready-banner">

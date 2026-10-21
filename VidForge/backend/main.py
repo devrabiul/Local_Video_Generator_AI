@@ -114,6 +114,7 @@ async def get_system_status():
     ollama_models = []
     default_model = "qwen3.5:9b"
     comfyui_ok = False
+    vram_used_gb = vram_total_gb = None
 
     async with httpx.AsyncClient(timeout=3.0) as client:
         # Check Ollama
@@ -137,6 +138,10 @@ async def get_system_status():
             r = await client.get(f"{ai_engine.COMFYUI_URL}/system_stats")
             if r.status_code == 200:
                 comfyui_ok = True
+                devices = r.json().get("devices") or []
+                if devices and devices[0].get("vram_total"):
+                    vram_total_gb = round(devices[0]["vram_total"] / 1024**3, 1)
+                    vram_used_gb = round(vram_total_gb - devices[0].get("vram_free", 0) / 1024**3, 1)
         except Exception:
             comfyui_ok = False
 
@@ -147,8 +152,21 @@ async def get_system_status():
         "comfyui_online": comfyui_ok,
         "platform": sys.platform,
         "wan_available": ai_engine.WAN_SUPPORTED,
-        "video_encoder": await asyncio.to_thread(ai_engine.get_video_encoder)
+        "video_encoder": await asyncio.to_thread(ai_engine.get_video_encoder),
+        "gpu_name": await asyncio.to_thread(_gpu_name),
+        "vram_used_gb": vram_used_gb,
+        "vram_total_gb": vram_total_gb,
     }
+
+_gpu_name_cache: str | None = None
+
+def _gpu_name() -> str:
+    """Primary accelerator name, detected once (nvidia-smi is too slow to run on every status poll)."""
+    global _gpu_name_cache
+    if _gpu_name_cache is None:
+        gpus = model_catalog.device_info()["gpus"]
+        _gpu_name_cache = gpus[0]["name"] if gpus else ""
+    return _gpu_name_cache
 
 def _mask(key: str) -> str:
     return f"{key[:4]}...{key[-4:]}" if len(key) > 8 else ("***" if key else "")

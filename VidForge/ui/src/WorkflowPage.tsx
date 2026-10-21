@@ -1,8 +1,9 @@
 import type React from 'react';
 import {
   Workflow, PenLine, Bot, Mic, Image as ImageIcon, Clapperboard, Music, CheckCircle2,
-  RefreshCw, Layers, Trash2, AlertTriangle, ArrowRight, Repeat, type LucideIcon,
+  RefreshCw, Layers, Trash2, AlertTriangle, ArrowRight, Repeat, Globe, Mail, Briefcase, UserRound, type LucideIcon,
 } from 'lucide-react';
+import authorPhoto from './assets/author.webp';
 
 interface Stage {
   status: string;
@@ -221,6 +222,63 @@ const NOTES: { Icon: LucideIcon; title: string; text: string }[] = [
   },
 ];
 
+// Author profile, from https://rixetbd.com/profile
+const AUTHOR = {
+  name: 'MD Rabiul Islam',
+  title: 'Principal Software Engineer · Tech Explorer',
+  role: 'Software Engineer Grade I at 6amTech',
+  bio: 'Laravel developer building scalable, high-performance web applications with Laravel, PHP, MySQL, REST APIs and Laravel package development, plus SPA architecture, media management, payment gateway integration and AI automation with the OpenAI API.',
+  skills: ['Laravel', 'PHP', 'MySQL', 'RESTful APIs', 'JavaScript', 'React', 'Vue', 'Livewire', 'Tailwind', 'OpenAI', 'Stripe', 'Git', 'Linux'],
+  experience: [
+    { company: '6amTech', role: 'Software Engineer Grade I', period: 'Mar 2023 – Present' },
+    { company: 'Dimaz', role: 'Web Developer', period: 'May 2022 – Feb 2023' },
+  ],
+  links: [
+    { label: 'Website', href: 'https://rixetbd.com', Icon: Globe },
+    { label: 'GitHub', href: 'https://github.com/devrabiul', Icon: null },
+    { label: 'Contact', href: 'https://rixetbd.com/contact', Icon: Mail },
+  ],
+};
+
+// lucide has no brand icons; GitHub mark inline
+const GithubMark = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z" />
+  </svg>
+);
+
+function AuthorSection() {
+  return (
+    <section className="glass-panel wf-author" aria-labelledby="wf-author-title">
+      <img className="wf-author-photo" src={authorPhoto} alt={AUTHOR.name} width={132} height={132} />
+      <div className="wf-author-body">
+        <span className="wf-author-kicker"><UserRound size={13} /> Author</span>
+        <h3 id="wf-author-title">{AUTHOR.name}</h3>
+        <div className="wf-author-title">{AUTHOR.title}</div>
+        <div className="wf-author-role"><Briefcase size={13} /> {AUTHOR.role}</div>
+        <p>{AUTHOR.bio}</p>
+        <div className="wf-author-skills">
+          {AUTHOR.skills.map(s => <span key={s}>{s}</span>)}
+        </div>
+        <div className="wf-author-foot">
+          <ul className="wf-author-exp">
+            {AUTHOR.experience.map(e => (
+              <li key={e.company}><strong>{e.company}</strong> · {e.role} <span>{e.period}</span></li>
+            ))}
+          </ul>
+          <div className="wf-author-links">
+            {AUTHOR.links.map(({ label, href, Icon }) => (
+              <a key={label} href={href} target="_blank" rel="noopener noreferrer" className="wf-author-link">
+                {Icon ? <Icon size={14} /> : <GithubMark />} {label}
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function WorkflowPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -290,6 +348,8 @@ export default function WorkflowPage() {
           </div>
         ))}
       </div>
+
+      <AuthorSection />
     </div>
   );
 }
