@@ -1,7 +1,7 @@
 import type React from 'react';
 import {
   Workflow, PenLine, Bot, Mic, Image as ImageIcon, Clapperboard, Music, CheckCircle2,
-  RefreshCw, Layers, Trash2, AlertTriangle, ArrowRight, Repeat, Globe, Mail, Briefcase, UserRound, type LucideIcon,
+  RefreshCw, Layers, Trash2, AlertTriangle, ArrowRight, Repeat, Globe, Mail, Briefcase, UserRound, Film, Languages, ShieldCheck, Sparkles, FolderOpen, Wand2, type LucideIcon,
 } from 'lucide-react';
 import authorPhoto from './assets/author.webp';
 
@@ -236,7 +236,7 @@ const AUTHOR = {
   links: [
     { label: 'Website', href: 'https://rixetbd.com', Icon: Globe },
     { label: 'GitHub', href: 'https://github.com/devrabiul', Icon: null },
-    { label: 'Contact', href: 'https://rixetbd.com/contact', Icon: Mail },
+    { label: 'Contact', href: 'mailto:rixetbd@gmail.com', Icon: Mail },
   ],
 };
 
@@ -250,12 +250,24 @@ const GithubMark = () => (
 function AuthorSection() {
   return (
     <section className="glass-panel wf-author" aria-labelledby="wf-author-title">
-      <img className="wf-author-photo" src={authorPhoto} alt={AUTHOR.name} width={132} height={132} />
+      <img className="wf-author-photo" src={authorPhoto} alt={AUTHOR.name} width={155} height={180} />
       <div className="wf-author-body">
         <span className="wf-author-kicker"><UserRound size={13} /> Author</span>
         <h3 id="wf-author-title">{AUTHOR.name}</h3>
         <div className="wf-author-title">{AUTHOR.title}</div>
         <div className="wf-author-role"><Briefcase size={13} /> {AUTHOR.role}</div>
+        <div className="wf-author-links">
+          {AUTHOR.links.map(({ label, href, Icon }) => (
+            <a
+              key={label}
+              href={href}
+              {...(href.startsWith('mailto:') ? { title: href.slice(7) } : { target: '_blank', rel: 'noopener noreferrer' })}
+              className="wf-author-link"
+            >
+              {Icon ? <Icon size={14} /> : <GithubMark />} {label}
+            </a>
+          ))}
+        </div>
         <p>{AUTHOR.bio}</p>
         <div className="wf-author-skills">
           {AUTHOR.skills.map(s => <span key={s}>{s}</span>)}
@@ -266,14 +278,47 @@ function AuthorSection() {
               <li key={e.company}><strong>{e.company}</strong> · {e.role} <span>{e.period}</span></li>
             ))}
           </ul>
-          <div className="wf-author-links">
-            {AUTHOR.links.map(({ label, href, Icon }) => (
-              <a key={label} href={href} target="_blank" rel="noopener noreferrer" className="wf-author-link">
-                {Icon ? <Icon size={14} /> : <GithubMark />} {label}
-              </a>
-            ))}
-          </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+// What the studio does; engines match backend/ai_engine.py and backend/tts_engine.py
+const ABOUT_FEATURES: { Icon: LucideIcon; title: string; text: string }[] = [
+  { Icon: Wand2, title: 'Prompt to finished video', text: 'Write a topic or story; VidForge plans the scenes, writes the narration, voices it, illustrates every scene and edits the final MP4 on its own.' },
+  { Icon: Film, title: '13 production types', text: 'Stories, news bulletins, documentaries, explainers, promos, reels, kids tales and more, each with its own writing style, pacing and music.' },
+  { Icon: Languages, title: 'Bangla, Hindi & English', text: 'Narration in three languages with expressive cloud voices (Gemini, ElevenLabs) or your own cloned voice running locally.' },
+  { Icon: Sparkles, title: 'Cinematic motion', text: 'Ultra HD Ken Burns camera moves on any machine, or real AI motion with Wan 2.1 on an NVIDIA GPU.' },
+  { Icon: FolderOpen, title: 'Projects you can refine', text: 'Every video is kept as a project: design its thumbnail, revise scenes and re-render only what changed.' },
+  { Icon: ShieldCheck, title: 'Runs on your computer', text: 'Script writing, images, motion and the final edit run locally. Your recordings and projects never leave this machine.' },
+];
+
+const ABOUT_STACK = ['Ollama LLM', 'ComfyUI', 'Z-Image Turbo', 'Wan 2.1 I2V', 'Gemini TTS', 'ElevenLabs', 'F5-TTS', 'FFmpeg', 'FastAPI', 'React + Vite'];
+
+function AboutSection() {
+  return (
+    <section className="glass-panel wf-about" aria-labelledby="wf-about-title">
+      <span className="wf-author-kicker"><Film size={13} /> About</span>
+      <h3 id="wf-about-title">VidForge AI Studio <span className="brand-badge">PRO v1.0</span></h3>
+      <p className="wf-about-lead">
+        A local-first AI video production studio. It turns a single prompt into a narrated, illustrated and edited
+        video, using open models on your own GPU instead of paid cloud render servers.
+      </p>
+      <div className="wf-about-grid">
+        {ABOUT_FEATURES.map(({ Icon, title, text }) => (
+          <div key={title} className="wf-about-item">
+            <Icon size={16} color="var(--a-blue)" />
+            <div>
+              <strong>{title}</strong>
+              <p>{text}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="wf-about-stack">
+        <span>Built with</span>
+        {ABOUT_STACK.map(t => <code key={t}>{t}</code>)}
       </div>
     </section>
   );
@@ -282,6 +327,9 @@ function AuthorSection() {
 export default function WorkflowPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <AuthorSection />
+      <AboutSection />
+
       <div className="glass-panel page-head">
         <div>
           <h2 className="page-title"><Workflow size={18} color="var(--a-blue)" /> How Video Generation Works</h2>
@@ -348,8 +396,6 @@ export default function WorkflowPage() {
           </div>
         ))}
       </div>
-
-      <AuthorSection />
     </div>
   );
 }

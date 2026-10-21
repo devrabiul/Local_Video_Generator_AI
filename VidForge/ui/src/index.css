@@ -489,15 +489,6 @@ button:disabled {
   transform: none;
 }
 
-.settings-fab-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.settings-fab-dot.ok { background: #10b981; }
-.settings-fab-dot.warn { background: #f59e0b; }
-
 .settings-fab-count {
   min-width: 20px;
   height: 20px;
@@ -517,8 +508,7 @@ button:disabled {
     padding: 5px;
     gap: 0;
   }
-  .settings-fab-label,
-  .settings-fab-dot {
+  .settings-fab-label {
     display: none;
   }
   .settings-fab-count {
@@ -699,7 +689,7 @@ button:disabled {
 .studio-container {
   max-width: 1750px;
   margin: 0 auto;
-  padding: 0 24px 24px 100px;
+  padding: 0 24px 96px 100px; /* bottom clears the fixed Settings button */
   min-height: 100vh;
   position: relative;
 }
@@ -708,7 +698,7 @@ button:disabled {
   .studio-container {
     max-width: 1750px;
     margin: 0 auto;
-    padding: 0 24px 24px 100px;
+    padding: 0 24px 96px 100px; /* bottom clears the fixed Settings button */
   }
 }
 
@@ -2998,8 +2988,8 @@ button:disabled {
 /* How It Works: author card */
 .wf-author { padding: 24px; display: flex; gap: 24px; align-items: flex-start; }
 .wf-author-photo {
-  width: 132px;
-  height: 132px;
+  width: 155px;
+  height: 180px;
   flex-shrink: 0;
   border-radius: 18px;
   object-fit: cover;
@@ -3022,11 +3012,11 @@ button:disabled {
   background: var(--line-soft);
   border: 1px solid var(--line);
 }
-.wf-author-foot { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.wf-author-foot { margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
 .wf-author-exp { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--t-body); }
 .wf-author-exp strong { color: var(--t-strong); }
 .wf-author-exp span { margin-left: 6px; color: var(--t-muted); font-variant-numeric: tabular-nums; }
-.wf-author-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.wf-author-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .wf-author-link {
   display: inline-flex;
   align-items: center;
@@ -3047,5 +3037,17 @@ button:disabled {
   .wf-author { flex-direction: column; align-items: center; text-align: center; }
   .wf-author-body { align-items: center; }
   .wf-author-skills, .wf-author-links { justify-content: center; }
-  .wf-author-foot { justify-content: center; }
 }
+
+/* How It Works: about VidForge */
+.wf-about { padding: 24px; display: flex; flex-direction: column; gap: 8px; }
+.wf-about h3 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 20px; font-weight: 800; color: var(--t-strong); }
+.wf-about-lead { margin: 0 0 6px; font-size: 13px; line-height: 1.6; color: var(--t-body); max-width: 820px; }
+.wf-about-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 10px; }
+.wf-about-item { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; background: var(--line-soft); border: 1px solid var(--line); }
+.wf-about-item svg { flex-shrink: 0; margin-top: 2px; }
+.wf-about-item strong { font-size: 13px; color: var(--t-strong); }
+.wf-about-item p { margin: 3px 0 0; font-size: 12px; line-height: 1.5; color: var(--t-body); }
+.wf-about-stack { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.wf-about-stack > span { font-size: 11px; font-weight: 700; color: var(--t-muted); margin-right: 4px; }
+.wf-about-stack code { padding: 3px 8px; border-radius: 6px; font-size: 11px; color: var(--t-body); background: var(--line-soft); border: 1px solid var(--line); }

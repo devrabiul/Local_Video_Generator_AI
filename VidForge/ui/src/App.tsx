@@ -405,9 +405,28 @@ const PERSONA_PROMPTS: Record<string, string> = {
   general: "You are a helpful, creative, and friendly AI assistant powered by Ollama."
 };
 
+type TabId = "production" | "chat" | "ollama" | "voices" | "gallery" | "models" | "workflow";
+
+// ?tab= slug for each tab, so a reload or shared link opens the same tab
+const TAB_SLUGS: Record<TabId, string> = {
+  production: "video-production",
+  chat: "ollama-ai-chat",
+  ollama: "script-studio",
+  voices: "voice-artists",
+  gallery: "projects",
+  models: "ai-models",
+  workflow: "how-it-works",
+};
+
+const tabFromUrl = (): TabId => {
+  const slug = new URLSearchParams(window.location.search).get("tab");
+  const match = (Object.keys(TAB_SLUGS) as TabId[]).find(id => TAB_SLUGS[id] === slug);
+  return match || "production";
+};
+
 export default function App() {
   // Navigation State
-  const [activeTab, setActiveTab] = useState<"production" | "chat" | "ollama" | "voices" | "gallery" | "models" | "workflow">("production");
+  const [activeTab, setActiveTab] = useState<TabId>(tabFromUrl);
 
   // ChatGPT-style Chat State
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([
@@ -523,14 +542,28 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Switch tab safely with audio cleanup
-  const switchTab = (tab: "production" | "chat" | "ollama" | "voices" | "gallery" | "models" | "workflow") => {
+  const switchTab = (tab: TabId, fromHistory = false) => {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
       setPlayingVoice(null);
     }
     setActiveTab(tab);
+    if (!fromHistory) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("tab") !== TAB_SLUGS[tab]) {
+        url.searchParams.set("tab", TAB_SLUGS[tab]);
+        window.history.pushState({ tab }, "", url);
+      }
+    }
   };
+
+  // Browser back/forward moves between tabs
+  useEffect(() => {
+    const onPop = () => switchTab(tabFromUrl(), true);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -1369,7 +1402,7 @@ export default function App() {
           { id: 'voices', label: 'Voice Artists', meta: 'F5 & Eleven', Icon: Volume2 },
           { id: 'gallery', label: 'Projects', meta: `${jobs.length} saved · ${completedJobs.length} ready`, Icon: FolderOpen },
           { id: 'models', label: 'AI Models & Hardware', meta: 'Downloads, sizes, requirements', Icon: Boxes },
-          { id: 'workflow', label: 'How It Works', meta: 'Video generation pipeline', Icon: Workflow },
+          { id: 'workflow', label: 'About & How It Works', meta: 'Author, about VidForge, pipeline', Icon: Workflow },
         ] as const).map(({ id, label, meta, Icon }, i) => (
           <Fragment key={id}>
             {(i === 4 || i === 5) && <span className="floating-dock-divider" aria-hidden="true" />}
@@ -2146,11 +2179,15 @@ export default function App() {
                   </div>
                 </div>
               ) : (
-                <div className="glass-panel" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 14, color: 'var(--t-muted)' }}>
-                  <CheckCircle2 size={24} color="#3b82f6" />
-                  <div>
-                    <div style={{ fontWeight: 600, color: 'var(--t-strong)' }}>Production Pipeline is Idle</div>
-                    <div style={{ fontSize: 12 }}>Submit a story on the left, or use the <strong>Ollama Story Studio</strong> tab to write and fine-tune your script.</div>
+                <div className="glass-panel" style={{ padding: 20 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                    <CheckCircle2 size={16} color="#3b82f6" />
+                    <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: 'var(--t-strong)' }}>
+                      Production Pipeline is Idle
+                    </h3>
+                  </div>
+                  <div style={{ padding: 24, textAlign: 'center', color: 'var(--t-faint)', fontSize: 13, background: 'var(--well)', borderRadius: 8 }}>
+                    Submit a story on the left, or use the <strong>Ollama Story Studio</strong> tab to write and fine-tune your script.
                   </div>
                 </div>
               )}
@@ -3410,13 +3447,8 @@ export default function App() {
             {showSettings ? <X size={16} /> : <Settings size={16} />}
           </span>
           <span className="settings-fab-label">Settings</span>
-          {!showSettings && (runningJobs.length + queuedJobs.length) > 0 ? (
+          {!showSettings && (runningJobs.length + queuedJobs.length) > 0 && (
             <span className="settings-fab-count" title="Jobs in queue">{runningJobs.length + queuedJobs.length}</span>
-          ) : (
-            <span
-              className={`settings-fab-dot ${systemStatus.ollama_online && systemStatus.comfyui_online && (hasGeminiKey || hasElevenLabsKey) ? 'ok' : 'warn'}`}
-              title={systemStatus.ollama_online && systemStatus.comfyui_online ? 'All services online' : 'Some services need attention'}
-            />
           )}
         </button>
       </div>
