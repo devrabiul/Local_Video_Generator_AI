@@ -96,14 +96,10 @@ def split_take(take: Path, texts: list[str], outputs: list[Path]) -> bool:
         logger.warning(f"Could not find {len(texts) - 1} scene pauses in {take.name}; voicing these scenes separately")
         return False
     bounds = [0.0, *cuts, total]
-    # Trim each piece's edge silence; the worker adds each scene's pause_after afterwards
-    trim = (
-        "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.05,"
-        "areverse,silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.12,areverse"
-    )
+    # Cut exactly at the natural sentence pauses so the scenes rejoin seamlessly into the continuous performance
     for (start, end), out in zip(zip(bounds, bounds[1:]), outputs):
         subprocess.run(
-            [FFMPEG, "-y", "-i", str(take), "-af", f"atrim=start={start:.3f}:end={end:.3f},asetpts=N/SR/TB,{trim}",
+            [FFMPEG, "-y", "-i", str(take), "-af", f"atrim=start={start:.3f}:end={end:.3f},asetpts=N/SR/TB",
              "-ar", "48000", str(out)],
             check=True, capture_output=True,
         )

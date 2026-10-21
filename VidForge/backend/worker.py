@@ -63,6 +63,7 @@ async def process_job(job: dict):
         # Step 1: Script & Scene Planning
         scenes = []
         narrator_style = job.get("narrator_style") or ""
+        script_mode = job.get("script_mode", "ai_generate")
         if job.get("scenes_json") and job["scenes_json"] != "[]":
             try:
                 scenes = json.loads(job["scenes_json"])
@@ -71,18 +72,34 @@ async def process_job(job: dict):
                 scenes = []
 
         if not scenes:
-            update_job_status(job_id, status="SCRIPTING", progress=10, current_step=f"Generating {video_type.title()} script (~{target_duration}s)...")
-            plan = await ai_engine.plan_script(
-                prompt=job["story_prompt"],
-                language=job["language"],
-                video_type=video_type,
-                target_duration=target_duration
-            )
-            scenes = plan.get("scenes", [])
-            title = plan.get("title", job.get("title") or "Untitled Production")
-            narrator_style = plan.get("narrator_style") or narrator_style
-            if not scenes:
-                raise ValueError(f"Ollama failed to generate {video_type} scenes")
+            if script_mode == "direct":
+                update_job_status(job_id, status="SCRIPTING", progress=10, current_step="Building visual scenes from exact script (No AI rewriting)...")
+                scenes = await ai_engine.build_scenes_from_direct_script(
+                    prompt=job["story_prompt"],
+                    language=job["language"]
+                )
+                title = job.get("title") or "Direct Script Production"
+            else:
+                char_refs = []
+                if job.get("character_references"):
+                    try:
+                        char_refs = json.loads(job["character_references"])
+                    except Exception:
+                        char_refs = []
+                step_title = f"Generating {video_type.title()} script with {len(char_refs)} custom character(s) (~{target_duration}s)..." if char_refs else f"Generating {video_type.title()} script (~{target_duration}s)..."
+                update_job_status(job_id, status="SCRIPTING", progress=10, current_step=step_title)
+                plan = await ai_engine.plan_script(
+                    prompt=job["story_prompt"],
+                    language=job["language"],
+                    video_type=video_type,
+                    target_duration=target_duration,
+                    character_references=char_refs
+                )
+                scenes = plan.get("scenes", [])
+                title = plan.get("title", job.get("title") or "Untitled Production")
+                narrator_style = plan.get("narrator_style") or narrator_style
+                if not scenes:
+                    raise ValueError(f"Ollama failed to generate {video_type} scenes")
         else:
             title = job.get("title") or "Untitled Production"
 
@@ -101,13 +118,15 @@ async def process_job(job: dict):
         engine, voice_name = tts_engine.split_voice(job["voice"])
 
         def _pause(i: int, sc: dict) -> float:
-            # Breathing room between scenes; the scene clip follows the padded audio length
+            # Continuous human speech: 0.0s artificial silence padding between connected scenes.
+            # Only hold slightly at the very end of the story.
+            if i == len(scenes) - 1:
+                return 0.5
             try:
-                pause = float(sc.get("pause_after", 0.6))
+                pause = float(sc.get("pause_after", 0.0))
             except (TypeError, ValueError):
-                pause = 0.6
-            pause = min(max(pause, 0.2), 2.0)
-            return max(pause, 1.0) if i == len(scenes) - 1 else pause
+                pause = 0.0
+            return max(0.0, min(pause, 1.0))
 
         # Continuous engines voice the story in one performance, so every scene's audio depends on the whole script
         continuous = engine in tts_engine.CONTINUOUS_ENGINES
@@ -124,8 +143,16 @@ async def process_job(job: dict):
             _checkpoint(job_id)
             update_job_status(job_id, status="VOICEOVER", progress=progress, current_step=msg)
 
-        async def _finish_scene_audio(i: int, raw: Path):
-            await asyncio.to_thread(ai_engine.pad_audio_with_silence, raw, _pause(i, scenes[i]))
+        async def _finish_scene_audio(i: int, raw: Path, is_split_from_continuous: bool = False):
+            if audio_paths[i].exists():
+                raw.unlink(missing_ok=True)
+                return
+            if not raw.exists():
+                logger.warning(f"Raw scene audio {raw} missing; skipping padding")
+                return
+            pause_sec = 0.0 if (is_split_from_continuous and i < len(scenes) - 1) else _pause(i, scenes[i])
+            if pause_sec > 0.0:
+                await asyncio.to_thread(ai_engine.pad_audio_with_silence, raw, pause_sec)
             await asyncio.to_thread(ai_engine.snap_audio_to_frames, raw, fps)
             await asyncio.to_thread(tts_engine.encode_scene_audio, raw, audio_paths[i])
             raw.unlink(missing_ok=True)
@@ -148,25 +175,36 @@ async def process_job(job: dict):
                     [texts[i] for i in idxs], job["voice"], take_path,
                     narrator_style=narrator_style, deliveries=[scenes[i].get("delivery", "") for i in idxs],
                     on_status=lambda m: _on_voice_status(m, progress),
+                    language=job.get("language", ""),
                 )
                 ok = await asyncio.to_thread(narration.split_take, take_path, [texts[i] for i in idxs], raws)
                 take_path.unlink(missing_ok=True)
                 if ok:
                     for i, raw in zip(idxs, raws):
-                        await _finish_scene_audio(i, raw)
+                        await _finish_scene_audio(i, raw, is_split_from_continuous=True)
                 else:
                     voice_separately += idxs
 
         if engine in tts_engine.BATCH_ENGINES and voice_separately:
             # Local cloning: one model load, one reference, one seed for every scene → one consistent voice
-            raws = [work_dir / f"tmp_scene_{audio_paths[i].stem}.wav" for i in voice_separately]
-            await _on_voice_status(f"Voicing {len(raws)} scenes with {tts_engine.LOCAL_TTS_MODELS[tts_engine.get_local_tts_model()]['label']}...", 31)
-            await tts_engine.generate_local_batch(
-                [scenes[i]["narration"] for i in voice_separately], voice_name, raws,
-                language=job["language"], on_status=lambda m: _on_voice_status(m, 38),
-            )
-            for i, raw in zip(voice_separately, raws):
-                await _finish_scene_audio(i, raw)
+            # Deduplicate targets so identical narration lines are only voiced and processed once
+            unique_indices = []
+            seen_audio = set()
+            for idx in voice_separately:
+                p = audio_paths[idx]
+                if p not in seen_audio and not p.exists():
+                    seen_audio.add(p)
+                    unique_indices.append(idx)
+
+            raws = [work_dir / f"tmp_scene_{i}_{audio_paths[i].stem}.wav" for i in unique_indices]
+            if raws:
+                await _on_voice_status(f"Voicing {len(raws)} scenes with {tts_engine.LOCAL_TTS_MODELS[tts_engine.get_local_tts_model()]['label']}...", 31)
+                await tts_engine.generate_local_batch(
+                    [scenes[i]["narration"] for i in unique_indices], voice_name, raws,
+                    language=job["language"], on_status=lambda m: _on_voice_status(m, 38),
+                )
+                for i, raw in zip(unique_indices, raws):
+                    await _finish_scene_audio(i, raw)
             voice_separately = []
 
         stitch_ids: list[str] = []  # ElevenLabs request stitching keeps the delivery continuous
@@ -175,7 +213,7 @@ async def process_job(job: dict):
             progress = 30 + int((i / len(scenes)) * 14)
             await _on_voice_status(f"Voicing scene {i+1}/{len(scenes)}...", progress)
             sc = scenes[i]
-            raw = work_dir / f"tmp_scene_{audio_paths[i].stem}.wav"
+            raw = work_dir / f"tmp_scene_{i}_{audio_paths[i].stem}.wav"
             await tts_engine.generate_voiceover(
                 sc["narration"],
                 job["voice"],

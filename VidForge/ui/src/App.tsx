@@ -6,7 +6,7 @@ import {
   Plus, ArrowRight, BookOpen, Bot, Cpu, AlertTriangle,
   MessageSquare, Send, User, Key, Zap, ExternalLink, Mic, Upload, Settings, X, Sun, Moon,
   Newspaper, Presentation, GraduationCap, Megaphone, Clapperboard, Camera, UserRound, Flame,
-  Plane, Rabbit, Search, Music, FolderOpen, Image as ImageIcon, PartyPopper, Boxes, Subtitles, Workflow, type LucideIcon
+  Plane, Rabbit, Search, Music, FolderOpen, Image as ImageIcon, PartyPopper, Boxes, Subtitles, Workflow, FileText, HelpCircle, type LucideIcon
 } from 'lucide-react';
 import ModelsPage from './ModelsPage';
 import BackgroundMusicPicker, { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type MusicTrack } from './BackgroundMusicPicker';
@@ -62,6 +62,15 @@ interface Job {
   thumbnail_design?: string;
   revision?: number;
   created_at: number;
+}
+
+interface CharacterRefState {
+  id: string;
+  name: string;
+  look: string;
+  imageUrl: string;
+  file?: File;
+  previewUrl?: string;
 }
 
 interface SystemStatus {
@@ -427,6 +436,7 @@ const tabFromUrl = (): TabId => {
 export default function App() {
   // Navigation State
   const [activeTab, setActiveTab] = useState<TabId>(tabFromUrl);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   // ChatGPT-style Chat State
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([
@@ -498,6 +508,8 @@ export default function App() {
   const [musicLoadFailed, setMusicLoadFailed] = useState(false);
   const [musicSettings, setMusicSettings] = useState<MusicSettings>(DEFAULT_MUSIC_SETTINGS);
   const [storyPrompt, setStoryPrompt] = useState("");
+  const [scriptMode, setScriptMode] = useState<"ai_generate" | "direct">("ai_generate");
+  const [showDirectScriptHelp, setShowDirectScriptHelp] = useState(false);
   const [title, setTitle] = useState("");
   const [language, setLanguage] = useState<string>("bn");
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "16:9">("9:16");
@@ -506,6 +518,8 @@ export default function App() {
   const [localTtsModel, setLocalTtsModel] = useState<string>("f5");
   const [localTtsModels, setLocalTtsModels] = useState<Record<string, { label: string; clone: boolean; languages: string; licence: string }>>({});
   const [fps, setFps] = useState<24 | 25 | 30 | 60>(30);
+  const [enableCharacterRef, setEnableCharacterRef] = useState<boolean>(false);
+  const [characterRefs, setCharacterRefs] = useState<CharacterRefState[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showInspirations, setShowInspirations] = useState(false);
   const [dismissedFailedJobIds, setDismissedFailedJobIds] = useState<string[]>([]);
@@ -549,6 +563,7 @@ export default function App() {
       setPlayingVoice(null);
     }
     setActiveTab(tab);
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     if (!fromHistory) {
       const url = new URL(window.location.href);
       if (url.searchParams.get("tab") !== TAB_SLUGS[tab]) {
@@ -909,11 +924,22 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchStatus();
-    fetchJobs();
-    fetchEngines();
-    fetchTtsConfig();
-    fetchMusicTracks();
+    const init = async () => {
+      try {
+        await Promise.allSettled([
+          fetchStatus(),
+          fetchJobs(),
+          fetchEngines(),
+          fetchTtsConfig(),
+          fetchMusicTracks()
+        ]);
+      } finally {
+        setTimeout(() => {
+          setIsInitialLoading(false);
+        }, 650);
+      }
+    };
+    init();
     const interval = setInterval(() => {
       fetchJobs();
       fetchStatus();
@@ -1101,6 +1127,37 @@ export default function App() {
 
     setIsSubmitting(true);
     try {
+      const processedCharRefs: { name: string; look: string; image_url: string }[] = [];
+      if (enableCharacterRef && characterRefs.length > 0) {
+        for (let i = 0; i < characterRefs.length; i++) {
+          const cr = characterRefs[i];
+          let finalUrl = cr.imageUrl;
+          if (cr.file && !finalUrl) {
+            try {
+              const fd = new FormData();
+              fd.append("file", cr.file);
+              const upRes = await fetch(`${API_BASE}/api/characters/upload`, {
+                method: "POST",
+                body: fd
+              });
+              if (upRes.ok) {
+                const upData = await upRes.json();
+                finalUrl = upData.url;
+              }
+            } catch (upErr) {
+              console.error("Failed to upload character image:", upErr);
+            }
+          }
+          if (cr.name.trim() || finalUrl) {
+            processedCharRefs.push({
+              name: cr.name.trim() || (i === 0 ? "Protagonist" : "Supporting Character"),
+              look: cr.look.trim(),
+              image_url: finalUrl
+            });
+          }
+        }
+      }
+
       const res = await fetch(`${API_BASE}/api/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1108,6 +1165,7 @@ export default function App() {
           title,
           story_prompt: storyPrompt,
           language,
+          script_mode: scriptMode,
           voice: selectedVoice,
           tts_engine: ttsEngine,
           aspect_ratio: aspectRatio,
@@ -1118,6 +1176,8 @@ export default function App() {
           enable_subtitles: enableSubtitles,
           resolution,
           fps,
+          enable_character_ref: enableCharacterRef && processedCharRefs.length > 0,
+          character_references: processedCharRefs,
           ...musicJobFields()
         })
       });
@@ -1345,6 +1405,21 @@ export default function App() {
 
   return (
     <div className="studio-container">
+      {/* Studio Preloader for Page Reload */}
+      <div className={`app-preloader ${!isInitialLoading ? 'fade-out' : ''}`} aria-hidden={!isInitialLoading}>
+        <div className="preloader-card">
+          <div className="preloader-logo-ring">
+            <div className="preloader-logo-inner">
+              <Film size={32} color="var(--a-rose)" />
+            </div>
+          </div>
+          <h2 className="preloader-title">VidForge AI Studio</h2>
+          <p className="preloader-subtitle">Initializing studio engines &amp; local models...</p>
+          <div className="preloader-bar-track">
+            <div className="preloader-bar-fill" />
+          </div>
+        </div>
+      </div>
       
       {/* Premium Glassmorphic Sticky Top Navbar (Single Slim Row) */}
       <header className="studio-header">
@@ -1665,19 +1740,380 @@ export default function App() {
                   />
                 </div>
 
-                {/* Dynamic Story/News/Pitch Prompt */}
+                {/* Script Mode Selector: AI Scriptwriter vs Direct Script (Exact Narrative) */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+                    <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--t-body)', display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
+                      <FileText size={14} color="var(--a-indigo)" /> স্ক্রিপ্ট মোড (Script Generation Feature):
+                    </label>
+                    {scriptMode === 'direct' && (
+                      <button
+                        type="button"
+                        onClick={() => setShowDirectScriptHelp(!showDirectScriptHelp)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--a-blue)',
+                          fontSize: 11,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          textDecoration: 'underline',
+                          padding: 0
+                        }}
+                      >
+                        <HelpCircle size={12} /> ফরম্যাট গাইড
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setScriptMode('ai_generate')}
+                      style={{
+                        padding: '9px 10px',
+                        borderRadius: 8,
+                        background: scriptMode === 'ai_generate' ? 'rgb(37 99 235 / calc(0.2 * var(--tint)))' : 'var(--surface)',
+                        border: '1px solid var(--line)',
+                        outline: scriptMode === 'ai_generate' ? '2px solid #3b82f6' : 'none',
+                        outlineOffset: -2,
+                        color: scriptMode === 'ai_generate' ? 'var(--a-blue)' : 'var(--t-muted)',
+                        fontWeight: 600,
+                        fontSize: 12,
+                        textAlign: 'center',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      🤖 AI Scriptwriter (স্বয়ংক্রিয়)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setScriptMode('direct')}
+                      style={{
+                        padding: '9px 10px',
+                        borderRadius: 8,
+                        background: scriptMode === 'direct' ? 'rgb(16 185 129 / calc(0.2 * var(--tint)))' : 'var(--surface)',
+                        border: '1px solid var(--line)',
+                        outline: scriptMode === 'direct' ? '2px solid #10b981' : 'none',
+                        outlineOffset: -2,
+                        color: scriptMode === 'direct' ? '#10b981' : 'var(--t-muted)',
+                        fontWeight: 600,
+                        fontSize: 12,
+                        textAlign: 'center',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      ✍️ Direct Script (হুবহু আমার স্ক্রিপ্ট)
+                    </button>
+                  </div>
+
+                  {scriptMode === 'direct' && (
+                    <div style={{ background: 'var(--surface-hover)', border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px', fontSize: 11.5, color: 'var(--t-muted)', marginBottom: 8, lineHeight: 1.5 }}>
+                      <div style={{ color: 'var(--t-body)', fontWeight: 600, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#10b981' }}>✓ Direct Script Mode সক্রিয় — AI আপনার স্ক্রিপ্টের একটি শব্দও পরিবর্তন করবে না!</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const template = `একদা এক গভীর বনে এক কাঠুরিয়া বাস করত। সে ছিল অত্যন্ত সৎ ও পরিশ্রমী।
+
+একদিন নদীর ধারে কাঠ কাটতে গিয়ে হঠাৎ তার হাতের কুঠারটি পানিতে পড়ে গেল।
+
+নদীর গভীর জলের দিকে তাকিয়ে সে কান্নায় ভেঙে পড়ল। সে জানত না এখন সে কী করবে।`;
+                            setStoryPrompt(template);
+                          }}
+                          style={{
+                            background: 'var(--surface)',
+                            border: '1px solid var(--line)',
+                            borderRadius: 4,
+                            padding: '3px 8px',
+                            fontSize: 11,
+                            color: 'var(--a-blue)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          নমুনা স্ক্রিপ্ট বসান
+                        </button>
+                      </div>
+                      <div>
+                        সহজতম পদ্ধতি: প্রতিটি প্যারাগ্রাফকে (একটি খালি লাইন দিয়ে আলাদা করে) লিখুন। প্রতিটি প্যারাগ্রাফ একটি আলাদা দৃশ্য হিসেবে তৈরি হবে।
+                      </div>
+                    </div>
+                  )}
+
+                  {scriptMode === 'direct' && showDirectScriptHelp && (
+                    <div style={{ background: 'var(--surface)', border: '1px solid #10b98144', borderRadius: 8, padding: '12px', fontSize: 11.5, color: 'var(--t-body)', marginBottom: 10, lineHeight: 1.5 }}>
+                      <div style={{ fontWeight: 700, marginBottom: 6, color: '#10b981' }}>তিনটি সমর্থিত ফরম্যাট:</div>
+                      <div style={{ marginBottom: 6 }}>
+                        <strong>১. সাধারণ প্যারাগ্রাফ (সবচেয়ে সহজ):</strong> প্রতিটি প্যারার মাঝে একটি খালি লাইন দিন। AI হুবহু এই প্যারাগ্রাফগুলো দিয়ে দৃশ্য সাজাবে।
+                      </div>
+                      <div style={{ marginBottom: 6 }}>
+                        <strong>২. ট্যাগ ফরম্যাট (দৃশ্য ও ভিজ্যুয়াল প্রম্পট সহ):</strong><br />
+                        <code style={{ background: 'var(--surface-hover)', padding: '4px 6px', borderRadius: 4, display: 'block', margin: '4px 0', whiteSpace: 'pre-wrap', fontSize: 11 }}>
+{`[Scene 1]
+Narration: একদা এক গভীর বনে এক কাঠুরিয়া বাস করত।
+Visual: A humble woodcutter with an axe in a lush ancient forest, cinematic lighting.
+
+[Scene 2]
+Narration: একদিন তার হাতের কুঠারটি নদীতে পড়ে গেল।
+Visual: An iron axe splashing into deep river water, dramatic camera.`}
+                        </code>
+                      </div>
+                      <div>
+                        <strong>৩. JSON অ্যারে:</strong><br />
+                        <code style={{ background: 'var(--surface-hover)', padding: '4px 6px', borderRadius: 4, display: 'block', margin: '4px 0', whiteSpace: 'pre-wrap', fontSize: 11 }}>
+{`[{"narration": "একদা এক গভীর বনে...", "visual_prompt": "Cinematic visual..."}]`}
+                        </code>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Dynamic Story/News/Pitch Prompt or Direct Script */}
                 <div style={{ marginBottom: 16 }}>
                   <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--t-body)', display: 'block', marginBottom: 5 }}>
-                    {PROMPT_LABELS[videoType] || "বিষয়বস্তু বা কাহিনী (Prompt):"}
+                    {scriptMode === 'direct' 
+                      ? "আপনার হুবহু স্ক্রিপ্ট (Exact Script - শব্দ পরিবর্তন হবে না):"
+                      : (PROMPT_LABELS[videoType] || "বিষয়বস্তু বা কাহিনী (Prompt):")}
                   </label>
                   <textarea
-                    rows={4}
+                    rows={scriptMode === 'direct' ? 7 : 4}
                     required
                     value={storyPrompt}
                     onChange={e => setStoryPrompt(e.target.value)}
-                    placeholder={PROMPT_PLACEHOLDERS[videoType] || "এখানে আপনার কাহিনী বা ঘটনাটি বিস্তারিত লিখুন..."}
+                    placeholder={scriptMode === 'direct' 
+                      ? "এখানে আপনার পূর্ণাঙ্গ স্ক্রিপ্টটি লিখুন। প্রতিটি দৃশ্যকে আলাদা করতে একটি খালি লাইন (প্যারাগ্রাফ) ব্যবহার করুন..."
+                      : (PROMPT_PLACEHOLDERS[videoType] || "এখানে আপনার কাহিনী বা ঘটনাটি বিস্তারিত লিখুন...")}
                     style={{ width: '100%', padding: '10px 12px', fontSize: 13, resize: 'vertical', lineHeight: 1.5 }}
                   />
+                </div>
+
+                {/* Character Reference / Custom Characters */}
+                <div style={{ 
+                  marginBottom: 18, 
+                  background: 'var(--surface)', 
+                  border: enableCharacterRef ? '1px solid rgb(168 85 247 / calc(0.45 * var(--tint)))' : '1px solid var(--line)', 
+                  borderRadius: 12, 
+                  padding: '12px 14px', 
+                  transition: 'all 0.2s ease',
+                  boxShadow: enableCharacterRef ? '0 2px 12px rgb(168 85 247 / calc(0.08 * var(--tint)))' : 'none'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                      <span style={{ 
+                        width: 32, height: 32, borderRadius: 9, 
+                        background: enableCharacterRef ? 'rgb(168 85 247 / calc(0.2 * var(--tint)))' : 'var(--surface-hover)', 
+                        color: enableCharacterRef ? 'var(--a-purple)' : 'var(--t-muted)', 
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0
+                      }}>
+                        <UserRound size={17} />
+                      </span>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <strong style={{ fontSize: 12.5, color: 'var(--t-strong)' }}>চরিত্রের রেফারেন্স ফটো (Character Reference & Cast)</strong>
+                          <span style={{ fontSize: 9, background: 'rgb(168 85 247 / calc(0.2 * var(--tint)))', color: 'var(--a-purple)', padding: '1px 5px', borderRadius: 4, fontWeight: 700 }}>AI CAST</span>
+                        </div>
+                        <div style={{ fontSize: 10.5, color: 'var(--t-muted)', marginTop: 2 }}>
+                          {enableCharacterRef 
+                            ? 'বাস্তব মানুষের ছবি থেকে নির্দিষ্ট এআই চরিত্র তৈরি করুন' 
+                            : 'বাস্তব মানুষের ছবি আপলোড করে নির্দিষ্ট চরিত্রের চেহারা দিতে এটি অন করুন'}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={enableCharacterRef}
+                      aria-label="Enable Character Reference Photos"
+                      className={`switch ${enableCharacterRef ? 'on' : ''}`}
+                      onClick={() => {
+                        const next = !enableCharacterRef;
+                        setEnableCharacterRef(next);
+                        if (next && characterRefs.length === 0) {
+                          setCharacterRefs([{
+                            id: 'char_1',
+                            name: '',
+                            look: '',
+                            imageUrl: ''
+                          }]);
+                        }
+                      }}
+                    >
+                      <span />
+                    </button>
+                  </div>
+
+                  {enableCharacterRef && (
+                    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+                      <div style={{ 
+                        background: videoType === 'animation' ? 'rgb(168 85 247 / calc(0.1 * var(--tint)))' : 'rgb(59 130 246 / calc(0.08 * var(--tint)))', 
+                        border: '1px solid',
+                        borderColor: videoType === 'animation' ? 'rgb(168 85 247 / calc(0.25 * var(--tint)))' : 'rgb(59 130 246 / calc(0.2 * var(--tint)))',
+                        borderRadius: 8, 
+                        padding: '8px 11px', 
+                        fontSize: 11, 
+                        color: 'var(--t-body)', 
+                        marginBottom: 12, 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        gap: 7 
+                      }}>
+                        <Sparkles size={14} color={videoType === 'animation' ? 'var(--a-purple)' : 'var(--a-blue)'} />
+                        <div>
+                          {videoType === 'animation' ? (
+                            <span><strong>৩ডি কার্টুন মোড সক্রিয়:</strong> আপলোড করা মুখের আদল নিয়ে এআই একটি <strong>৩ডি পিক্সার / ডিজনি স্টাইলের CGI চরিত্র</strong> তৈরি করবে।</span>
+                          ) : (
+                            <span><strong>সিনেম্যাটিক মোড সক্রিয়:</strong> আপলোড করা মুখের আদল নিয়ে এআই দৃশ্যগুলোতে <strong>বাস্তবসম্মত চরিত্র</strong> বজায় রাখবে।</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: characterRefs.length > 1 ? '1fr 1fr' : '1fr', gap: 10 }}>
+                        {characterRefs.map((char, idx) => (
+                          <div key={char.id} style={{ background: 'var(--surface-hover)', border: '1px solid var(--line)', borderRadius: 9, padding: '10px 12px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--a-purple)' }}>
+                                চরিত্র {idx + 1} (Character {idx + 1})
+                              </span>
+                              {characterRefs.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setCharacterRefs(characterRefs.filter(c => c.id !== char.id))}
+                                  style={{ background: 'transparent', border: 'none', color: 'var(--a-red)', cursor: 'pointer', padding: 2 }}
+                                  title="Remove character"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Photo Upload Area */}
+                            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 9 }}>
+                              <div 
+                                style={{ 
+                                  width: 64, height: 64, borderRadius: 8, overflow: 'hidden', flexShrink: 0, 
+                                  background: 'var(--surface)', border: '1px dashed var(--line)',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  position: 'relative'
+                                }}
+                              >
+                                {(char.previewUrl || char.imageUrl) ? (
+                                  <img 
+                                    src={char.previewUrl || char.imageUrl} 
+                                    alt={char.name || "Character"} 
+                                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+                                  />
+                                ) : (
+                                  <label style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', cursor: 'pointer', color: 'var(--t-muted)' }}>
+                                    <Upload size={18} />
+                                    <span style={{ fontSize: 9, marginTop: 2 }}>ছবি দিন</span>
+                                    <input
+                                      type="file"
+                                      accept="image/png,image/jpeg,image/webp"
+                                      style={{ display: 'none' }}
+                                      onChange={e => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          const previewUrl = URL.createObjectURL(file);
+                                          setCharacterRefs(characterRefs.map(c => c.id === char.id ? { ...c, file, previewUrl } : c));
+                                        }
+                                      }}
+                                    />
+                                  </label>
+                                )}
+                              </div>
+
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                {(char.previewUrl || char.imageUrl) ? (
+                                  <div>
+                                    <label style={{ fontSize: 10.5, color: 'var(--a-blue)', cursor: 'pointer', textDecoration: 'underline', display: 'inline-block', marginBottom: 4 }}>
+                                      ছবি পরিবর্তন করুন (Change)
+                                      <input
+                                        type="file"
+                                        accept="image/png,image/jpeg,image/webp"
+                                        style={{ display: 'none' }}
+                                        onChange={e => {
+                                          const file = e.target.files?.[0];
+                                          if (file) {
+                                            const previewUrl = URL.createObjectURL(file);
+                                            setCharacterRefs(characterRefs.map(c => c.id === char.id ? { ...c, file, previewUrl } : c));
+                                          }
+                                        }}
+                                      />
+                                    </label>
+                                    <div style={{ fontSize: 9.5, color: 'var(--a-green-bright)' }}>✓ ছবি নির্বাচন হয়েছে</div>
+                                  </div>
+                                ) : (
+                                  <div style={{ fontSize: 10, color: 'var(--t-muted)', lineHeight: 1.3 }}>
+                                    মানুষের একটি পরিষ্কার পোর্ট্রেট ছবি দিন (Face photo, max 15MB)
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Character Name */}
+                            <div style={{ marginBottom: 6 }}>
+                              <label style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--t-body)', display: 'block', marginBottom: 3 }}>
+                                চরিত্রের নাম (Character Name):
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="যেমন: রহিম / John / ডা. অনিকা"
+                                value={char.name}
+                                onChange={e => setCharacterRefs(characterRefs.map(c => c.id === char.id ? { ...c, name: e.target.value } : c))}
+                                style={{ width: '100%', padding: '6px 8px', fontSize: 12 }}
+                              />
+                            </div>
+
+                            {/* Character Look / Traits */}
+                            <div>
+                              <label style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--t-body)', display: 'block', marginBottom: 3 }}>
+                                চেহারা ও স্টাইল (Traits / Look - Optional):
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="যেমন: ৩০ বছর বয়সী, ছোট চুল, কালো জ্যাকেট"
+                                value={char.look}
+                                onChange={e => setCharacterRefs(characterRefs.map(c => c.id === char.id ? { ...c, look: e.target.value } : c))}
+                                style={{ width: '100%', padding: '6px 8px', fontSize: 11.5 }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {characterRefs.length < 2 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCharacterRefs([
+                              ...characterRefs,
+                              { id: 'char_2', name: '', look: '', imageUrl: '' }
+                            ]);
+                          }}
+                          style={{
+                            marginTop: 10,
+                            width: '100%',
+                            padding: '7px 10px',
+                            borderRadius: 8,
+                            border: '1px dashed rgb(168 85 247 / calc(0.4 * var(--tint)))',
+                            background: 'rgb(168 85 247 / calc(0.06 * var(--tint)))',
+                            color: 'var(--a-purple)',
+                            fontSize: 11.5,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 6
+                          }}
+                        >
+                          <Plus size={13} /> ২য় চরিত্র যোগ করুন (Add 2nd Character)
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Language Selection */}

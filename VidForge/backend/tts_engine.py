@@ -21,7 +21,7 @@ from ai_engine import BASE_DIR, COMFYUI_DIR, CONFIG_FILE, FFMPEG, FFPROBE, _defa
 
 ENGINES = ("gemini", "elevenlabs", "f5tts")
 # Engines that voice a whole story in one take (see narration.py); the others go scene by scene
-CONTINUOUS_ENGINES = ("gemini",)
+CONTINUOUS_ENGINES = ("gemini", "f5tts")
 # Engines that voice every scene in one batch (one model load, one reference, one seed)
 BATCH_ENGINES = ("f5tts",)
 DEFAULT_ENGINE = "gemini"
@@ -635,23 +635,33 @@ async def generate_story_take(
     narrator_style: str = "",
     deliveries: list[str] | None = None,
     on_status: Callable[[str], Awaitable[None]] | None = None,
+    language: str = "",
 ) -> Path:
     """Voices several consecutive scenes as ONE continuous performance.
 
-    A long pause separates the scenes so narration.split_take can cut the take apart again.
+    A pause separates the scenes so narration.split_take can cut the take apart again.
     """
     engine, name = split_voice(voice)
-    if engine != "gemini":
-        raise ValueError(f"{engine} does not support continuous takes")
-    joined = " [long pause]\n\n".join(t.strip() for t in texts)
-    arc = [d for d in (deliveries or []) if d]
-    style_parts = [narrator_style or "warm, expressive storyteller",
-                   "one continuous narration in the same voice, tone and pace from start to finish"]
-    if arc:
-        # Gemini takes a single style per request; describe how the emotion moves through the take
-        style_parts.append("emotion moves from " + " to ".join(dict.fromkeys(arc[:1] + arc[-1:])))
-    style = "; ".join(style_parts)[:240]
-    return await generate_gemini_voiceover(joined, name, output_path, style=style, on_status=on_status)
+    if engine == "gemini":
+        joined = " [long pause]\n\n".join(t.strip() for t in texts)
+        arc = [d for d in (deliveries or []) if d]
+        style_parts = [narrator_style or "warm, expressive storyteller",
+                       "one continuous narration in the same voice, tone and pace from start to finish"]
+        if arc:
+            # Gemini takes a single style per request; describe how the emotion moves through the take
+            style_parts.append("emotion moves from " + " to ".join(dict.fromkeys(arc[:1] + arc[-1:])))
+        style = "; ".join(style_parts)[:240]
+        return await generate_gemini_voiceover(joined, name, output_path, style=style, on_status=on_status)
+    elif engine in BATCH_ENGINES:
+        # Local TTS (OmniVoice, F5-TTS) voices the continuous story take
+        # Three periods indicate a natural sentence pause between scenes so silencedetect finds cut points
+        joined = " ... \n\n".join(t.strip() for t in texts)
+        wav = output_path.with_name(f"{output_path.stem}_raw.wav")
+        await generate_local_batch([joined], name, [wav], language=language, on_status=on_status)
+        if wav.exists():
+            os.replace(wav, output_path)
+        return output_path
+    raise ValueError(f"{engine} does not support continuous takes")
 
 
 def split_voice(voice: str) -> tuple[str, str]:

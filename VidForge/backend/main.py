@@ -6,6 +6,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 import httpx
+from loguru import logger
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -66,6 +67,9 @@ class CreateJobRequest(BaseModel):
     enable_subtitles: bool = True
     resolution: Literal[480, 720, 1080, 1440] = 1080  # height of the short side
     fps: Literal[24, 25, 30, 60] = 30
+    script_mode: Literal["ai_generate", "direct"] = "ai_generate"
+    enable_character_ref: bool = False
+    character_references: list[dict] = []
 
 class TTSConfigRequest(BaseModel):
     elevenlabs_api_key: str | None = None
@@ -107,6 +111,10 @@ class ChatRequest(BaseModel):
     model: str = "story-writer:latest"
     messages: list[ChatMessage]
     system_prompt: str | None = None
+
+class ParseDirectScriptRequest(BaseModel):
+    text: str
+    language: str = "bn"
 
 @app.get("/api/system/status")
 async def get_system_status():
@@ -377,9 +385,22 @@ def create_job(req: CreateJobRequest):
         music_ducking=req.music_ducking,
         enable_subtitles=req.enable_subtitles,
         resolution=req.resolution,
-        fps=req.fps
+        fps=req.fps,
+        script_mode=req.script_mode,
+        character_references=json.dumps(req.character_references, ensure_ascii=False) if (req.enable_character_ref and req.character_references) else "[]"
     )
     return {"id": job_id, "status": "QUEUED"}
+
+@app.post("/api/script/parse_direct")
+async def parse_direct_script_endpoint(req: ParseDirectScriptRequest):
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="Script text cannot be empty")
+    try:
+        scenes = await ai_engine.build_scenes_from_direct_script(req.text, req.language)
+        return {"scenes": scenes, "count": len(scenes)}
+    except Exception as e:
+        logger.exception("Error parsing direct script")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/jobs/{job_id}")
 def get_job_detail(job_id: str):
@@ -568,6 +589,19 @@ async def suggest_thumbnail_headlines(job_id: str):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ollama could not suggest headlines: {e}")
     return {"headlines": headlines}
+
+CHARACTERS_UPLOAD_DIR = projects.JOBS_DIR / "uploads" / "characters"
+CHARACTERS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+@app.post("/api/characters/upload")
+async def upload_character_image(file: UploadFile = File(...)):
+    data, suffix = await _read_image(file)
+    CHARACTERS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"char_{uuid.uuid4().hex[:10]}{suffix}"
+    out_file = CHARACTERS_UPLOAD_DIR / filename
+    out_file.write_bytes(data)
+    url = f"/jobs/uploads/characters/{filename}"
+    return {"url": url, "filename": filename}
 
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 app.mount("/jobs", StaticFiles(directory=str(JOBS_DIR)), name="jobs")

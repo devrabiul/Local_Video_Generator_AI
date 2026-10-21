@@ -289,7 +289,8 @@ async def generate_story_script(
     tone: str = "epic",
     scene_count: int | None = None,
     video_type: str = "story",
-    target_duration: int = 60
+    target_duration: int = 60,
+    character_references: list[dict] | None = None
 ) -> dict:
     """Uses Ollama to generate a structured storyboard script with dynamic high-retention visual cuts"""
     target_lang = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["bn"])
@@ -298,25 +299,60 @@ async def generate_story_script(
     computed_scenes, words_target, words_per_scene = calculate_duration_profile(target_duration)
     final_scene_count = scene_count if (scene_count and scene_count > 0) else computed_scenes
     
+    custom_char_system_prompt = ""
+    custom_char_user_prompt = ""
+    if character_references:
+        formatted_chars = []
+        for cr in character_references:
+            name = cr.get("name", "").strip() or "Main Character"
+            look = cr.get("look", "").strip()
+            if video_type == "animation":
+                char_style = f"3D animated CGI feature film character, Pixar/Disney 3D style rendition of {name}"
+                if look:
+                    char_style += f", featuring: {look}"
+                else:
+                    char_style += ", expressive 3D animated face, Pixar-like eyes, stylized hair and clothing, smooth 3D render texture"
+            else:
+                char_style = f"Photorealistic real human character {name}"
+                if look:
+                    char_style += f", featuring: {look}"
+                else:
+                    char_style += ", natural authentic skin texture, realistic facial features, cinematic lighting"
+            formatted_chars.append(f"- Name: \"{name}\" | Look: \"{char_style}\"")
+
+        custom_char_system_prompt = f"""
+
+MANDATORY CHARACTER REFERENCE & CAST (Provided by user):
+The story MUST feature these specific characters as the key protagonists:
+{chr(10).join(formatted_chars)}
+In "story_bible.characters", you MUST register these exact character names and looks, and feature them actively across the scenes.
+"""
+        custom_char_user_prompt = f"\n\nFeaturing Characters:\n" + "\n".join(formatted_chars)
+
     system_prompt = f"""{cfg['persona']}
 Write ONE complete, continuous video story with EXACTLY {final_scene_count} chronological scenes, based on the user's prompt.
 Production Format: {cfg['name']}
 Target Total Video Duration: Approximately {target_duration} seconds (~{target_duration // 60}m {target_duration % 60}s).
-
+{custom_char_system_prompt}
 STORY CONTINUITY (most important — the video must feel like one film, not separate clips):
 - Plan the whole story first: a hook, rising tension, a climax, and a resolution. Every scene is the direct result of the scene before it.
 - Each scene's narration picks up exactly where the previous scene ended (cause → effect, "then", "but", "meanwhile", "at that moment"). Never restart, never summarise, never repeat information.
 - Keep the same main characters, with the same names and roles, from start to finish. Introduce each character once.
 - Keep one narrator voice and point of view, and one tense, for the whole story.
 
-STORY BIBLE (keeps every image consistent):
-- "characters": every recurring on-screen character, with a FIXED English "look": age, gender, skin tone, face, hair, build, and exact clothing with colours and accessories. The same look is reused in every scene, so be specific and never change it.
-- "setting": era, place and recurring locations.
-- "visual_style": ONE art direction for the whole video (lighting, colour palette, lens, mood). Visual Guidelines: {cfg['visual_guidelines']}
+STORY BIBLE (keeps every image consistent across the entire video):
+- "characters": exactly the 1-3 KEY recurring characters in this story. Give each a FIXED, detailed English "look": species/age, gender, skin/material, face, hair/features, build, and exact iconic clothing with colours and accessories. This exact look is reused across every scene.
+- "setting": overarching world, era, and recurring locations (in English).
+- "visual_style": ONE consistent art direction for the whole video. Visual Guidelines: {cfg['visual_guidelines']}
+
+CRITICAL CHARACTER ISOLATION & LANGUAGE RULES:
+- "narration" is the ONLY field written in {target_lang}. It must be natural, flowing storyteller prose.
+- ALL OTHER FIELDS MUST BE 100% IN ENGLISH ("story_bible", "characters", "look", "location", "action", "visual_prompt", "motion_prompt", "setting", "visual_style").
+- NEVER invent random extra people, bystanders, or unrelated characters. Each scene must focus exclusively on the specific characters listed in its "characters" field.
 
 PACING:
 - EXACTLY {final_scene_count} scenes, each ~4-6 seconds on screen.
-- Each scene's narration is ~{words_per_scene} words (1-3 short, natural sentences in {target_lang}); ~{words_target} words in total.
+- Each scene's narration is ~{words_per_scene} words (natural, flowing storyteller sentences in {target_lang}); ~{words_target} words in total.
 
 VOICE PERFORMANCE:
 - One consistent narrator persona for the whole story; only the intensity changes with the emotional arc (hook → deepening → climax → reflective ending).
@@ -326,12 +362,12 @@ VOICE PERFORMANCE:
 Fields for each scene:
 1. "narration": spoken voiceover STRICTLY in {target_lang} (~{words_per_scene} words, cues not counted). {cfg['narration_guidelines']}
 2. "delivery": 2-6 vivid English words for this scene's emotion, volume and pace (e.g. "hushed, slow suspense", "grief-stricken, voice trembling", "fierce and booming").
-3. "pause_after": seconds of silence after this scene: 0.3 quick flow, 0.6 normal, 1.0-1.5 before a dramatic turn and after the final scene.
+3. "pause_after": seconds of silence after this scene: 0.0 for seamless continuous storytelling (default), 0.4-0.5 only after the final scene.
 4. "characters": names (from the story bible) visible in this scene; [] if none.
 5. "location": where this scene happens, in English (reuse the same wording when the place repeats).
 6. "action": one English sentence — what visibly happens in this scene.
 7. "continuity": one English sentence — how this scene follows from the previous one ("opening" for scene 1).
-8. "visual_prompt": English, for photorealistic image generation — composition, camera angle, framing, the action, expressions, lighting. Refer to characters by name; their fixed look is added automatically. Vary shots (wide, medium, close-up) but keep the same world.
+8. "visual_prompt": English, for photorealistic image generation — composition, camera angle, framing, the action, expressions, lighting. Describe ONLY the featured characters, never extra people.
 9. "motion_prompt": English, for image-to-video AI. Use SUBTLE, physically plausible motion only: breathing, blinking, a slow head turn, hair or cloth moving in wind, smoke, flickering fire, drifting dust, water ripples — plus ONE slow camera move (slow push in, slow pan, gentle dolly). Avoid running, fighting, fast gestures, crowds in motion, close-up hands, transformations and spinning cameras: they cause distortion.
 10. "music_level": background-music intensity for this moment: "low" (intimate, sad, tense whisper, revelations), "medium" (normal storytelling) or "high" (action, triumph, climax).
 
@@ -350,7 +386,7 @@ Respond ONLY with valid JSON in this exact structure:
       "id": 1,
       "narration": "Voiceover in {target_lang}",
       "delivery": "How to speak it, in English",
-      "pause_after": 0.6,
+      "pause_after": 0.0,
       "characters": ["Name"],
       "location": "Where",
       "action": "What happens",
@@ -362,14 +398,61 @@ Respond ONLY with valid JSON in this exact structure:
   ]
 }}"""
 
-    plan = await ollama_json(system_prompt, f"Topic / Concept:\n{topic}", model=model, task="script generation")
-    return normalize_plan(plan)
+    plan = await ollama_json(system_prompt, f"Topic / Concept:\n{topic}{custom_char_user_prompt}", model=model, task="script generation")
+    plan = await sanitize_visual_prompts_to_english(plan, model=model)
+    return normalize_plan(plan, character_references=character_references, video_type=video_type)
+
+
+async def sanitize_visual_prompts_to_english(plan: dict | list, model: str | None = None) -> dict | list:
+    """Ensures character looks and scene visual prompts are in clean, descriptive English for ComfyUI."""
+    is_list = isinstance(plan, list)
+    plan_dict = {"scenes": plan} if is_list else plan
+
+    bible = plan_dict.get("story_bible") or {}
+    chars = bible.get("characters") or []
+    has_bengali = any(isinstance(c, dict) and re.search(r'[\u0980-\u09FF]', str(c.get("look", ""))) for c in chars)
+    if not has_bengali:
+        has_bengali = any(isinstance(sc, dict) and re.search(r'[\u0980-\u09FF]', str(sc.get("visual_prompt", "") or sc.get("action", ""))) for sc in plan_dict.get("scenes") or [])
+    
+    if not has_bengali:
+        return plan
+
+    logger.info("Translating non-English character looks and visual prompts to English for ComfyUI...")
+    system_prompt = """You are an AI visual art director.
+ComfyUI diffusion models only understand English.
+Translate and rewrite the character looks and scene visual descriptions below into vivid, detailed ENGLISH prompts for image generation.
+Keep character names unchanged. Ensure each character has a specific, consistent appearance (colors, clothing, traits).
+Respond ONLY with valid JSON:
+{
+  "characters": [{"name": "Name", "look": "Exact English visual appearance"}],
+  "setting": "English setting description",
+  "scenes": [{"id": 1, "visual_prompt": "Detailed English visual composition"}]
+}"""
+    to_translate = {
+        "characters": [{"name": c.get("name"), "look": c.get("look")} for c in chars if isinstance(c, dict)],
+        "setting": bible.get("setting", ""),
+        "scenes": [{"id": sc.get("id", i+1), "visual_prompt": sc.get("visual_prompt") or sc.get("action", "") or sc.get("narration", "")} for i, sc in enumerate(plan_dict.get("scenes") or []) if isinstance(sc, dict)]
+    }
+    try:
+        translated = await ollama_json(system_prompt, json.dumps(to_translate, ensure_ascii=False), model=model, task="visual prompt translation")
+        if translated.get("characters"):
+            bible["characters"] = translated["characters"]
+        if translated.get("setting"):
+            bible["setting"] = translated["setting"]
+        trans_scenes = {s.get("id"): s.get("visual_prompt") for s in (translated.get("scenes") or []) if isinstance(s, dict)}
+        for sc in plan_dict.get("scenes") or []:
+            sc_id = sc.get("id")
+            if sc_id in trans_scenes and trans_scenes[sc_id]:
+                sc["visual_prompt"] = trans_scenes[sc_id]
+    except Exception as e:
+        logger.warning(f"Could not translate visual prompts to English: {e}")
+    return plan_dict["scenes"] if is_list else plan_dict
 
 
 MUSIC_LEVELS = ("low", "medium", "high")
 
 
-def normalize_plan(plan: dict) -> dict:
+def normalize_plan(plan: dict, character_references: list[dict] | None = None, video_type: str = "story") -> dict:
     """Validates the planner's JSON and copies the story bible into every scene.
 
     Scenes are the only thing persisted with a project (and edited in Story Studio), so each
@@ -381,20 +464,56 @@ def normalize_plan(plan: dict) -> dict:
     for ch in bible.get("characters") or []:
         if isinstance(ch, dict) and str(ch.get("name", "")).strip() and str(ch.get("look", "")).strip():
             looks[str(ch["name"]).strip()] = str(ch["look"]).strip()
+
+    # Ensure custom character references are guaranteed in looks
+    if character_references:
+        for cr in character_references:
+            c_name = str(cr.get("name", "")).strip()
+            if not c_name:
+                continue
+            c_look = str(cr.get("look", "")).strip()
+            if video_type == "animation":
+                styled = f"3D animated CGI feature film character, Pixar/Disney 3D style rendition of {c_name}"
+                if c_look:
+                    styled += f", {c_look}"
+                else:
+                    styled += ", expressive 3D animated face, Pixar-like eyes, stylized hair and clothing, smooth 3D render texture"
+            else:
+                styled = f"Photorealistic real human character {c_name}"
+                if c_look:
+                    styled += f", {c_look}"
+                else:
+                    styled += ", natural authentic skin texture, realistic facial features, cinematic lighting"
+            looks[c_name] = styled
+
     style = str(bible.get("visual_style", "")).strip()
     setting = str(bible.get("setting", "")).strip()
 
     scenes = []
+    primary_char_name = list(looks.keys())[0] if looks else None
+
     for sc in plan.get("scenes") or []:
         if not isinstance(sc, dict) or not str(sc.get("narration", "")).strip():
             continue
         names = [str(n).strip() for n in (sc.get("characters") or []) if isinstance(n, str)]
+
+        # If user supplied custom characters and scene has no recognized cast, include primary character
+        if character_references and not any(n in looks for n in names) and primary_char_name:
+            names.append(primary_char_name)
+
         sc["cast"] = [{"name": n, "look": looks[n]} for n in names if n in looks]
         sc["style"] = style
         sc["setting"] = setting
         level = str(sc.get("music_level", "medium")).strip().lower()
         sc["music_level"] = level if level in MUSIC_LEVELS else "medium"
         sc["id"] = len(scenes) + 1
+
+        # Ensure visual_prompt is never None or empty
+        vp = sc.get("visual_prompt")
+        if not vp or str(vp).strip().lower() in ("none", "null", ""):
+            vp = sc.get("action") or sc.get("additional") or sc.get("description") or sc.get("narration") or ""
+        sc["visual_prompt"] = str(vp).strip()
+
         scenes.append(sc)
     plan["scenes"] = scenes
     plan["story_bible"] = {"characters": [{"name": n, "look": l} for n, l in looks.items()], "setting": setting, "visual_style": style}
@@ -402,16 +521,39 @@ def normalize_plan(plan: dict) -> dict:
 
 
 def compose_image_prompt(scene: dict) -> str:
-    """Scene prompt + the fixed looks of the characters in it + the shared setting and style."""
-    parts = [str(scene.get("visual_prompt", "")).strip().rstrip(".")]
-    for member in scene.get("cast") or []:
-        parts.append(f"{member['name']}: {member['look']}")
+    """Scene prompt + fixed looks of characters in it + strict isolation + setting/style."""
+    parts = []
+
+    # 1. Base visual prompt
+    vp = scene.get("visual_prompt") or scene.get("action") or scene.get("additional") or ""
+    vp = str(vp).strip().rstrip(".")
+    if vp and vp.lower() not in ("none", "null"):
+        parts.append(vp)
+
+    # 2. Characters & Cast Isolation
+    cast_members = scene.get("cast") or []
+    if cast_members:
+        char_tokens = []
+        char_names = []
+        for m in cast_members:
+            name = m.get("name", "").strip()
+            look = m.get("look", "").strip()
+            if name and look:
+                char_tokens.append(f"{name} ({look})")
+                char_names.append(name)
+        if char_tokens:
+            parts.append(f"Featuring: {', '.join(char_tokens)}")
+            parts.append(f"Depict ONLY {', '.join(char_names)}. Strictly no extra people, no random bystanders, maintain consistent character appearance")
+    else:
+        parts.append("Environment and scenery only, no characters or extra people")
+
     if scene.get("location"):
         parts.append(f"Location: {scene['location']}")
     if scene.get("setting"):
         parts.append(f"Setting: {scene['setting']}")
     if scene.get("style"):
         parts.append(f"Style: {scene['style']}")
+
     return ". ".join(p for p in parts if p) + "."
 
 
@@ -497,7 +639,7 @@ async def get_active_ollama_model() -> str:
         pass
     return "qwen3.5:9b"
 
-async def plan_script(prompt: str, language: str, video_type: str = "story", target_duration: int = 60, model: str = None) -> dict:
+async def plan_script(prompt: str, language: str, video_type: str = "story", target_duration: int = 60, model: str = None, character_references: list[dict] | None = None) -> dict:
     if not model:
         model = await get_active_ollama_model()
     return await generate_story_script(
@@ -505,16 +647,239 @@ async def plan_script(prompt: str, language: str, video_type: str = "story", tar
         language=language,
         model=model,
         video_type=video_type,
-        target_duration=target_duration
+        target_duration=target_duration,
+        character_references=character_references
     )
 
-async def plan_story(prompt: str, language: str, model: str = None) -> dict:
-    return await plan_script(prompt, language, video_type="story", target_duration=60, model=model)
+async def plan_story(prompt: str, language: str, model: str = None, character_references: list[dict] | None = None) -> dict:
+    return await plan_script(prompt, language, video_type="story", target_duration=60, model=model, character_references=character_references)
 
 SCENE_FIELDS = ("narration", "delivery", "pause_after", "characters", "location", "action", "continuity",
                 "visual_prompt", "motion_prompt", "music_level")
 # Copied from the original script into revised scenes; the planner fills them from the story bible
 BIBLE_FIELDS = ("cast", "style", "setting")
+
+def parse_direct_script_raw(text: str) -> list[dict]:
+    """Parses raw user-submitted script into structured scenes without altering any narration words.
+    
+    Supported formats:
+    1. JSON array: [{"narration": "...", "visual_prompt": "..."}]
+    2. Tagged format:
+       [Scene 1] or [দৃশ্য ১]
+       Narration / ভয়েসওভার: ...
+       Visual / চিত্রায়ন: ...
+    3. Blank-line separated paragraphs (each paragraph = 1 scene).
+    """
+    text = text.strip()
+    if not text:
+        return []
+
+    # 1. Try parsing JSON array
+    if (text.startswith("[") and text.endswith("]")) or (text.startswith("{") and "scenes" in text):
+        try:
+            parsed = json.loads(text)
+            items = parsed if isinstance(parsed, list) else parsed.get("scenes", [])
+            scenes = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                narration = str(item.get("narration") or item.get("voiceover") or item.get("text") or "").strip()
+                if not narration:
+                    continue
+                scenes.append({
+                    "narration": narration,
+                    "visual_prompt": str(item.get("visual_prompt") or item.get("visual") or item.get("image_prompt") or "").strip(),
+                    "delivery": str(item.get("delivery") or "").strip(),
+                    "motion_prompt": str(item.get("motion_prompt") or "subtle cinematic motion, slow push in").strip(),
+                    "pause_after": float(item.get("pause_after", 0.0)),
+                    "characters": item.get("characters") if isinstance(item.get("characters"), list) else [],
+                    "location": str(item.get("location") or "").strip(),
+                    "action": str(item.get("action") or "").strip(),
+                    "continuity": str(item.get("continuity") or "").strip(),
+                    "music_level": item.get("music_level", "medium") if item.get("music_level") in MUSIC_LEVELS else "medium",
+                })
+            if scenes:
+                return scenes
+        except Exception:
+            pass
+
+    # 2. Try parsing tagged scenes: [Scene 1: title], [Scene 1], [দৃশ্য ১: শিরোনাম], [দৃশ্য ১], Scene 1:, দৃশ্য ১:, শেষ বার্তা:, Outro:
+    scene_header_pattern = re.compile(
+        r'(?:^|\n)\s*(?:\[\s*(?:Scene|দৃশ্য|Scène|Escena|Outro|শেষ বার্তা|উপসংহার)[^\]]*\]|(?:Scene|দৃশ্য|Scène|Escena|Outro|শেষ বার্তা|উপসংহার)\s*#?[০-৯\d]*\s*[:\-])',
+        re.IGNORECASE
+    )
+    splits = list(scene_header_pattern.finditer(text))
+    if splits:
+        scenes = []
+        is_animation = any(w in text.lower() for w in ("animation", "animated", "cartoon", "3d animation", "anime", "pixar", "disney"))
+        for i, match in enumerate(splits):
+            header_text = match.group(0).strip()
+            start = match.end()
+            end = splits[i + 1].start() if i + 1 < len(splits) else len(text)
+            block = text[start:end].strip()
+            if not block:
+                continue
+
+            is_outro = bool(re.search(r'শেষ বার্তা|Outro|উপসংহার', header_text, re.IGNORECASE))
+
+            narr_match = re.search(
+                r'(?:Narration|ভয়েসওভার|বক্তব্য|Voiceover|Script)\s*[:\-]\s*(.+?)(?=\n\s*(?:Visual|চিত্রায়ন|ছবি|Prompt|Image|Delivery|ডেলিভারি|Motion|মোশন)\s*[:\-]|$)',
+                block, re.DOTALL | re.IGNORECASE
+            )
+            vis_match = re.search(
+                r'(?:Visual|চিত্রায়ন|ছবি|Prompt|Image)\s*[:\-]\s*(.+?)(?=\n\s*(?:Narration|ভয়েসওভার|Delivery|ডেলিভারি|Motion|মোশন)\s*[:\-]|$)',
+                block, re.DOTALL | re.IGNORECASE
+            )
+            deliv_match = re.search(
+                r'(?:Delivery|ডেলিভারি)\s*[:\-]\s*(.+?)(?=\n\s*(?:Narration|Visual|Motion)\s*[:\-]|$)',
+                block, re.DOTALL | re.IGNORECASE
+            )
+            mot_match = re.search(
+                r'(?:Motion|মোশন)\s*[:\-]\s*(.+?)(?=\n\s*(?:Narration|Visual|Delivery)\s*[:\-]|$)',
+                block, re.DOTALL | re.IGNORECASE
+            )
+
+            if narr_match:
+                narration = narr_match.group(1).strip()
+            else:
+                if vis_match:
+                    narration = block[:vis_match.start()].strip()
+                else:
+                    narration = block
+
+            # Strip any accidental metadata tags from narration
+            narration = re.sub(r'^(?:Narration|ভয়েসওভার|বক্তব্য|Voiceover|Script)\s*[:\-]\s*', '', narration, flags=re.IGNORECASE).strip()
+            narration = re.sub(r'\n\s*(?:Visual|চিত্রায়ন|ছবি|Prompt|Image)\s*[:\-].*$', '', narration, flags=re.DOTALL | re.IGNORECASE).strip()
+
+            visual_prompt = vis_match.group(1).strip() if vis_match else ""
+            visual_prompt = re.sub(r'^(?:Visual|চিত্রায়ন|ছবি|Prompt|Image)\s*[:\-]\s*', '', visual_prompt, flags=re.IGNORECASE).strip()
+
+            if is_outro and not visual_prompt:
+                visual_prompt = (
+                    "Warm heartfelt closing scene, inspirational quote, friendship theme, cinematic 3D animation, soft golden glow"
+                    if is_animation else
+                    "Warm heartfelt closing scene, inspirational quote, friendship theme, soft golden sunlight glow, cinematic atmosphere"
+                )
+
+            delivery = deliv_match.group(1).strip() if deliv_match else ""
+            motion_prompt = mot_match.group(1).strip() if mot_match else "subtle cinematic motion, slow push in"
+
+            if narration:
+                scenes.append({
+                    "narration": narration,
+                    "visual_prompt": visual_prompt,
+                    "delivery": delivery,
+                    "motion_prompt": motion_prompt,
+                    "pause_after": 0.0,
+                    "characters": [],
+                    "location": "",
+                    "action": "",
+                    "continuity": "",
+                    "music_level": "medium",
+                })
+        if scenes:
+            return scenes
+
+    # 3. Simple Paragraph format: blank lines separate scenes
+    paragraphs = [p.strip() for p in re.split(r'\n\s*\n+', text) if p.strip()]
+    scenes = []
+    for p in paragraphs:
+        # Strip any accidental tags if someone pasted without headers
+        clean_p = re.sub(r'^(?:Narration|ভয়েসওভার|বক্তব্য|Voiceover|Script)\s*[:\-]\s*', '', p, flags=re.IGNORECASE).strip()
+        scenes.append({
+            "narration": clean_p,
+            "visual_prompt": "",
+            "delivery": "",
+            "motion_prompt": "subtle cinematic motion, slow push in",
+            "pause_after": 0.0,
+            "characters": [],
+            "location": "",
+            "action": "",
+            "continuity": "",
+            "music_level": "medium",
+        })
+    return scenes
+
+async def build_scenes_from_direct_script(prompt: str, language: str = "bn") -> list[dict]:
+    """Builds video scenes from an exact direct script.
+    
+    Guarantees that narration is 100% word-for-word identical to the user's input.
+    Generates English visual prompts for ComfyUI Z-Image Turbo if needed.
+    """
+    raw_scenes = parse_direct_script_raw(prompt)
+    if not raw_scenes:
+        raise ValueError("Could not parse any scenes from the provided script. Please check formatting.")
+
+    is_animation = any(w in prompt.lower() for w in ("animation", "animated", "cartoon", "3d animation", "anime", "pixar", "disney"))
+
+    # Check if any scene is missing an English visual prompt
+    needs_visual = any(
+        not sc.get("visual_prompt") or any(ord(c) > 127 for c in sc.get("visual_prompt", ""))
+        for sc in raw_scenes
+    )
+
+    if needs_visual:
+        target_lang = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["bn"])
+        narrations_summary = "\n".join([f"Scene {i+1}: {sc['narration']}" for i, sc in enumerate(raw_scenes)])
+        style_instruction = (
+            "cinematic 3D animated CGI feature film look, Pixar/Disney style 3D character modeling, expressive stylized faces, vibrant lighting, animated movie aesthetic. DO NOT describe realistic real-life human photos."
+            if is_animation else
+            "rich photorealistic cinematic lighting, detailed environment, dramatic camera angle, atmospheric lighting."
+        )
+        system_prompt = f"""You are a visual director for an AI image generator (Z-Image Turbo).
+The director has provided the exact voiceover narration for {len(raw_scenes)} scenes.
+DO NOT change, edit, or translate the voiceover narration.
+For each scene, write:
+1. "visual_prompt": A vivid English image prompt ({style_instruction}) illustrating what happens in that scene.
+2. "action": One English sentence describing the visible action.
+3. "location": The place in English.
+4. "motion_prompt": Subtle cinematic motion (e.g. "slow push in, subtle breathing and dust motes").
+
+Respond ONLY with valid JSON:
+{{
+  "scenes": [
+    {{
+      "id": 1,
+      "visual_prompt": "English visual description...",
+      "action": "Visible action in English...",
+      "location": "Location in English...",
+      "motion_prompt": "slow push in"
+    }}
+  ]
+}}"""
+        try:
+            model = await get_active_ollama_model()
+            res = await ollama_json(system_prompt, f"Scene Narrations ({target_lang}):\n{narrations_summary}", model=model, task="direct script visual prompt generation")
+            planned = res.get("scenes", [])
+            for i, sc in enumerate(raw_scenes):
+                if i < len(planned) and isinstance(planned[i], dict):
+                    p = planned[i]
+                    if not sc.get("visual_prompt") or any(ord(c) > 127 for c in sc.get("visual_prompt", "")):
+                        sc["visual_prompt"] = p.get("visual_prompt") or sc.get("visual_prompt") or ""
+                    sc["action"] = p.get("action") or sc.get("action") or ""
+                    sc["location"] = p.get("location") or sc.get("location") or ""
+                    if p.get("motion_prompt"):
+                        sc["motion_prompt"] = p["motion_prompt"]
+        except Exception as e:
+            logger.warning(f"Could not generate visual prompts with Ollama for direct script: {e}")
+            fallback_style = "cinematic 3D animation, Pixar Disney 3D animated movie style, expressive character faces" if is_animation else "cinematic film lighting, photorealistic 8k"
+            for i, sc in enumerate(raw_scenes):
+                if not sc.get("visual_prompt") or any(ord(c) > 127 for c in sc.get("visual_prompt", "")):
+                    sc["visual_prompt"] = f"{fallback_style}, scene depicting: {sc['narration'][:120]}"
+
+    # Final sanitization: ensure IDs, 0.0 pause for continuous speech, sanitize prompts to English
+    for i, sc in enumerate(raw_scenes):
+        sc["id"] = i + 1
+        sc["pause_after"] = 0.0
+        if not sc.get("music_level") or sc.get("music_level") not in MUSIC_LEVELS:
+            sc["music_level"] = "medium"
+        if not sc.get("motion_prompt"):
+            sc["motion_prompt"] = "subtle cinematic motion, slow push in"
+
+    # Sanitize visual prompts to English for ComfyUI
+    raw_scenes = await sanitize_visual_prompts_to_english(raw_scenes)
+    return raw_scenes
+
 
 async def refine_script(title: str, scenes: list[dict], instruction: str, language: str, video_type: str = "story") -> list[dict]:
     """Revises an existing storyboard according to a user instruction.
@@ -598,9 +963,15 @@ def pad_audio_with_silence(audio_path: Path, seconds: float) -> Path:
     """Appends a breathing pause so consecutive scenes don't run into each other."""
     if seconds <= 0:
         return audio_path
+    if not audio_path.exists():
+        logger.warning(f"pad_audio_with_silence: audio file not found, skipping: {audio_path}")
+        return audio_path
     tmp = audio_path.with_name(f"{audio_path.stem}_padded{audio_path.suffix}")
     cmd = [FFMPEG, "-y", "-i", str(audio_path), "-af", f"apad=pad_dur={seconds:.2f}", str(tmp)]
-    subprocess.run(cmd, check=True, capture_output=True)
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        err = res.stderr.strip() if res.stderr else f"ffmpeg exited with {res.returncode}"
+        raise RuntimeError(f"FFmpeg padding failed for {audio_path.name}: {err}")
     os.replace(tmp, audio_path)
     return audio_path
 
@@ -861,15 +1232,21 @@ def snap_audio_to_frames(audio_path: Path, fps: int = VIDEO_FPS) -> float:
     Each scene clip is a whole number of frames; without this the tiny remainders add up over
     many scenes and the narration drifts away from the picture.
     """
+    if not audio_path.exists():
+        logger.warning(f"snap_audio_to_frames: audio file not found: {audio_path}")
+        return 0.0
     duration = get_audio_duration(audio_path)
     target = frames_for(duration, fps) / fps
     if abs(target - duration) < 0.0005:
         return duration
     tmp = audio_path.with_name(f"{audio_path.stem}_snap{audio_path.suffix}")
-    subprocess.run(
+    res = subprocess.run(
         [FFMPEG, "-y", "-i", str(audio_path), "-af", f"apad=whole_dur={target:.4f},atrim=end={target:.4f}", str(tmp)],
-        check=True, capture_output=True,
+        capture_output=True, text=True,
     )
+    if res.returncode != 0:
+        err = res.stderr.strip() if res.stderr else f"ffmpeg exited with {res.returncode}"
+        raise RuntimeError(f"FFmpeg snap_audio_to_frames failed for {audio_path.name}: {err}")
     os.replace(tmp, audio_path)
     return get_audio_duration(audio_path)
 
