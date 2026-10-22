@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Box, Sparkles, RefreshCw, Upload, Film, 
   CheckCircle2, Layers, User, Plus, Trash2, RotateCcw,
-  UserPlus, X, Image as ImageIcon
+  UserPlus, X, Image as ImageIcon, Key
 } from 'lucide-react';
 import { toast } from './Toast';
 
@@ -94,6 +94,13 @@ export default function Persistent3DCharactersPage({ apiBase, active }: { apiBas
   const [isSavingNewChar, setIsSavingNewChar] = useState<boolean>(false);
   const [autoGen3D, setAutoGen3D] = useState<boolean>(true);
 
+  // Tripo3D Key & Generation state
+  const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
+  const [tripoApiKeyInput, setTripoApiKeyInput] = useState<string>('');
+  const [isSavingKey, setIsSavingKey] = useState<boolean>(false);
+  const [isGeneratingTripo, setIsGeneratingTripo] = useState<boolean>(false);
+  const [tripoProgressText, setTripoProgressText] = useState<string>('');
+
   const fetchStatusAndCharacters = async () => {
     try {
       const [statusRes, charsRes] = await Promise.all([
@@ -144,6 +151,79 @@ export default function Persistent3DCharactersPage({ apiBase, active }: { apiBas
       toast.error(`জেনারেশন ব্যর্থ: ${err.message}`);
     } finally {
       setIsGeneratingLocal(false);
+    }
+  };
+
+  const handleGenerateTripoModel = async () => {
+    if (!selectedChar) return;
+    if (!systemStatus?.tripo3d_configured) {
+      setShowKeyModal(true);
+      return;
+    }
+
+    setIsGeneratingTripo(true);
+    setTripoProgressText('Tripo3D AI টাস্ক শুরু হচ্ছে...');
+    try {
+      const res = await fetch(`${apiBase}/api/3d/characters/${selectedChar.character_id}/generate-tripo3d`, {
+        method: 'POST'
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Tripo3D জেনারেশন শুরু করা যায়নি');
+      }
+
+      const data = await res.json();
+      const taskId = data.task?.task_id || data.task?.id;
+      if (!taskId) throw new Error('কোনো Task ID পাওয়া যায়নি');
+
+      let done = false;
+      let attempts = 0;
+      while (!done && attempts < 60) {
+        await new Promise(r => setTimeout(r, 3000));
+        attempts++;
+        const pollRes = await fetch(`${apiBase}/api/3d/tripo3d/task/${taskId}?char_id=${selectedChar.character_id}`);
+        if (!pollRes.ok) continue;
+        const taskData = await pollRes.json();
+        const progress = taskData.progress || Math.min(95, attempts * 4);
+        setTripoProgressText(`Tripo3D AI ৩ডি মডেল তৈরি করছে: ${progress}%...`);
+        
+        if (taskData.status === 'SUCCESS') {
+          done = true;
+          toast.success(`'${selectedChar.name}' ৩ডি মডেল সফলভাবে তৈরি ও ব্লেন্ডারে ইম্পোর্ট করা হয়েছে!`);
+          await fetchStatusAndCharacters();
+        } else if (taskData.status === 'FAILED') {
+          done = true;
+          throw new Error(taskData.error || 'Tripo3D ৩ডি তৈরি ব্যর্থ হয়েছে');
+        }
+      }
+    } catch (err: any) {
+      toast.error(`Tripo3D ত্রুটি: ${err.message}`);
+    } finally {
+      setIsGeneratingTripo(false);
+      setTripoProgressText('');
+    }
+  };
+
+  const handleSaveTripoKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingKey(true);
+    try {
+      const res = await fetch(`${apiBase}/api/3d/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tripo3d_api_key: tripoApiKeyInput.trim() })
+      });
+      if (res.ok) {
+        toast.success('Tripo3D API Key সফলভাবে সংরক্ষিত হয়েছে!');
+        setShowKeyModal(false);
+        await fetchStatusAndCharacters();
+      } else {
+        toast.error('API Key সংরক্ষণ ব্যর্থ হয়েছে');
+      }
+    } catch (err: any) {
+      toast.error(`ত্রুটি: ${err.message}`);
+    } finally {
+      setIsSavingKey(false);
     }
   };
 
@@ -394,6 +474,26 @@ export default function Persistent3DCharactersPage({ apiBase, active }: { apiBas
             <Sparkles size={13} color="var(--a-purple)" />
             <span><strong>GPU:</strong> {systemStatus?.gpu || 'NVIDIA NVENC'}</span>
           </div>
+          <button
+            type="button"
+            onClick={() => setShowKeyModal(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(59, 130, 246, 0.15))',
+              border: '1px solid rgba(168, 85, 247, 0.4)',
+              padding: '6px 12px',
+              borderRadius: 8,
+              fontSize: 11.5,
+              color: 'var(--a-purple)',
+              cursor: 'pointer',
+              fontWeight: 600
+            }}
+          >
+            <Key size={13} />
+            <span>Tripo3D AI Key: {systemStatus?.tripo3d_configured ? 'সক্রিয় (Active)' : 'সেট করুন (Set API Key)'}</span>
+          </button>
         </div>
       </div>
 
@@ -553,15 +653,44 @@ export default function Persistent3DCharactersPage({ apiBase, active }: { apiBas
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <button
               type="button"
+              onClick={handleGenerateTripoModel}
+              disabled={isGeneratingTripo || !selectedChar}
+              style={{
+                width: '100%',
+                fontSize: 12,
+                padding: '10px 14px',
+                justifyContent: 'center',
+                background: 'linear-gradient(135deg, #7928ca 0%, #ff0080 100%)',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 7,
+                cursor: (isGeneratingTripo || !selectedChar) ? 'not-allowed' : 'pointer',
+                opacity: (isGeneratingTripo || !selectedChar) ? 0.7 : 1,
+                boxShadow: '0 4px 14px 0 rgba(121, 40, 202, 0.39)'
+              }}
+            >
+              {isGeneratingTripo ? (
+                <><RefreshCw size={14} className="animate-spin" /> {tripoProgressText || 'Tripo3D AI প্রসেসিং...'}</>
+              ) : (
+                <><Sparkles size={14} /> 🚀 Tripo3D AI দিয়ে মডেল বানান (SOTA Cloud 3D)</>
+              )}
+            </button>
+
+            <button
+              type="button"
               onClick={handleGenerateLocalModel}
-              disabled={isGeneratingLocal}
+              disabled={isGeneratingLocal || !selectedChar}
               className="btn btn-primary"
               style={{ width: '100%', fontSize: 12, padding: '9px 12px', justifyContent: 'center' }}
             >
               {isGeneratingLocal ? (
-                <><RefreshCw size={13} className="animate-spin" /> ব্লেন্ডারে ৩ডি রিগ তৈরি হচ্ছে...</>
+                <><RefreshCw size={13} className="animate-spin" /> ব্লেন্ডারে হাই-কোয়ালিটি ৩ডি স্কাল্প হচ্ছে...</>
               ) : (
-                <><Sparkles size={13} /> ব্লেন্ডারে ৩ডি মডেল ও রিগ তৈরি করুন</>
+                <><Sparkles size={13} /> ব্লেন্ডারে ৩ডি স্কাল্প ও রিগ তৈরি করুন (Local GPU)</>
               )}
             </button>
 
@@ -1044,6 +1173,104 @@ export default function Persistent3DCharactersPage({ apiBase, active }: { apiBas
                     <><RefreshCw size={14} className="animate-spin" /> চরিত্র সংরক্ষণ ও ৩ডি প্রস্তুত হচ্ছে...</>
                   ) : (
                     <><Sparkles size={14} /> চরিত্র সংরক্ষণ করুন</>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Tripo3D API Key Modal */}
+      {showKeyModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(5px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: 20
+        }}>
+          <div style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--line)',
+            borderRadius: 16,
+            width: '100%',
+            maxWidth: 500,
+            padding: 24,
+            boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Key size={18} color="var(--a-purple)" />
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--t-strong)' }}>
+                  Tripo3D AI API Key কনফিগারেশন
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowKeyModal(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--t-muted)', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ fontSize: 12, color: 'var(--t-muted)', marginBottom: 16, lineHeight: 1.6 }}>
+              Tripo3D হলো বিশ্বের অন্যতম সেরা <strong>Image-to-3D Foundation AI Model</strong> যা যেকোনো 2D পোর্ট্রেট ছবি থেকে সম্পূর্ণ রিগড ও টেক্সচার্ড হাই-কোয়ালিটি থ্রিডি ক্যারেক্টার মডেল তৈরি করে।
+              <br />
+              আপনার ফ্রি বা পেইড API Key পেতে ভিজিট করুন: <a href="https://platform.tripo3d.ai" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--a-purple)', textDecoration: 'underline' }}>platform.tripo3d.ai</a>
+            </div>
+
+            <form onSubmit={handleSaveTripoKey}>
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--t-strong)', marginBottom: 6 }}>
+                  Tripo3D API Key:
+                </label>
+                <input
+                  type="password"
+                  value={tripoApiKeyInput}
+                  onChange={e => setTripoApiKeyInput(e.target.value)}
+                  placeholder="tsk_..."
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    background: 'var(--well)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--t-strong)',
+                    fontSize: 13,
+                    fontFamily: 'monospace',
+                    outline: 'none',
+                    boxSizing: 'border-box'
+                  }}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowKeyModal(false)}
+                  disabled={isSavingKey}
+                  className="btn btn-secondary"
+                  style={{ fontSize: 12.5, padding: '8px 16px' }}
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingKey || !tripoApiKeyInput.trim()}
+                  className="btn btn-primary"
+                  style={{ fontSize: 12.5, padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  {isSavingKey ? (
+                    <><RefreshCw size={14} className="animate-spin" /> সেভ হচ্ছে...</>
+                  ) : (
+                    <><CheckCircle2 size={14} /> Key সংরক্ষণ করুন</>
                   )}
                 </button>
               </div>

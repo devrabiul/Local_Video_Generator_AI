@@ -637,6 +637,10 @@ def compose_image_prompt(scene: dict, shot_index: int = 0, total_shots: int = 1)
     if total_shots > 1:
         angle_cue = SHOT_CAMERA_ANGLES[shot_index % len(SHOT_CAMERA_ANGLES)]
         parts.append(angle_cue)
+        if shot_index > 0:
+            parts.append(
+                "maintaining identical characters, consistent wardrobe, matching cinematic lighting, same environment and visual continuity as the scene establishing shot"
+            )
 
     # 2. Characters & Cast Isolation
     cast_members = scene.get("cast") or []
@@ -1391,7 +1395,7 @@ WAN_NEGATIVE_PROMPT = (
     "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，"
     "丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，"
     "杂乱的背景，三条腿，背景人很多，倒着走, "
-    "deformed face, morphing, warped background, extra limbs, flickering, text, watermark"
+    "deformed face, morphing, warped background, extra limbs, flickering, text, watermark, jitter, stutter, freeze frame, sudden jerky movement"
 )
 
 
@@ -1532,24 +1536,45 @@ def frames_for(duration: float, fps: int = VIDEO_FPS) -> int:
 
 def fit_clip_to_duration(raw_video: Path, target_duration: float, aspect: str, final_video: Path,
                          resolution: int = 1080, fps: int = VIDEO_FPS) -> Path:
-    """Fits an AI motion clip to the scene length without reversing it.
-
-    A clip that is a little short is slowed down (up to 1.3x); anything left over holds the last
-    frame. The result is exactly frames_for(target_duration, fps) frames.
+    """Fits an AI motion clip to the exact scene shot duration with silky-smooth frame interpolation,
+    zero frozen frames, and clean cinematic cuts (no black flickering).
     """
     rw, rh = render_size(aspect, resolution)
-    clip_len = max(0.1, get_audio_duration(raw_video))  # ffprobe format duration works for video too
-    stretch = min(1.3, max(1.0, target_duration / clip_len))
-    fade_d = min(0.3, target_duration / 4)
-    vf = (
-        f"setpts={stretch:.4f}*PTS,fps={fps},"
-        f"scale={rw}:{rh}:force_original_aspect_ratio=increase:flags=lanczos,crop={rw}:{rh},"
-        f"tpad=stop_mode=clone:stop_duration={target_duration:.3f},"
-        f"fade=t=in:st=0:d={fade_d:.2f},fade=t=out:st={max(0.0, target_duration - fade_d):.2f}:d={fade_d:.2f}"
-    )
+    clip_len = max(0.1, get_audio_duration(raw_video))
+    total_frames = frames_for(target_duration, fps)
+
+    # 1. Zero frozen frames: adjust PTS speed so generated motion spans the whole shot duration.
+    # 2. Smooth 16 FPS -> 30 FPS conversion using framerate motion blending instead of frame duplication.
+    # 3. Clean cinematic cuts: remove fade-in / fade-out to black between shots.
+    if target_duration <= clip_len:
+        vf = (
+            f"trim=0:duration={target_duration:.4f},setpts=PTS-STARTPTS,"
+            f"framerate=fps={fps}:interp_start=0:interp_end=255,"
+            f"scale={rw}:{rh}:force_original_aspect_ratio=increase:flags=lanczos,crop={rw}:{rh}"
+        )
+    else:
+        stretch = target_duration / clip_len
+        if stretch <= 2.2:
+            # Silky-smooth cinematic slow-motion across the full duration
+            vf = (
+                f"setpts={stretch:.6f}*PTS,"
+                f"framerate=fps={fps}:interp_start=0:interp_end=255,"
+                f"scale={rw}:{rh}:force_original_aspect_ratio=increase:flags=lanczos,crop={rw}:{rh}"
+            )
+        else:
+            # For longer stretches, loop motion seamlessly so it never holds a static still frame
+            loops = math.ceil(target_duration / clip_len)
+            vf = (
+                f"loop=loop={loops}:size={frames_for(clip_len, 16)}:start=0,"
+                f"setpts=PTS-STARTPTS,"
+                f"framerate=fps={fps}:interp_start=0:interp_end=255,"
+                f"scale={rw}:{rh}:force_original_aspect_ratio=increase:flags=lanczos,crop={rw}:{rh},"
+                f"trim=0:duration={target_duration:.4f}"
+            )
+
     cmd = [
         FFMPEG, "-y", "-i", str(raw_video), "-vf", vf, "-an",
-        "-frames:v", str(frames_for(target_duration, fps)),
+        "-frames:v", str(total_frames),
         *video_encoder_args(20, (rw, rh), fps), "-pix_fmt", "yuv420p", "-r", str(fps),
         str(final_video),
     ]
@@ -1615,11 +1640,7 @@ def create_fallback_motion_clip(image_path: Path, duration: float, aspect: str, 
         # Subtle breathe zoom (1.0 to 1.04)
         vf = f"scale={scale_w}:{scale_h},zoompan=z='min(zoom+{0.0003 * step:.6f},1.04)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={total_frames}:s={rw}x{rh}:fps={fps}"
 
-    # Soft cinematic dissolve/fade transition at clip boundaries (0.35s in, 0.35s out)
-    fade_d = min(0.35, duration / 4)
-    fade_out_st = max(0.1, duration - fade_d)
-    vf += f",fade=t=in:st=0:d={fade_d:.2f},fade=t=out:st={fade_out_st:.2f}:d={fade_d:.2f}"
-
+    # Clean cinematic cuts without black flashes between shots
     cmd = [
         FFMPEG, "-y", "-loop", "1", "-i", str(image_path),
         "-vf", vf,

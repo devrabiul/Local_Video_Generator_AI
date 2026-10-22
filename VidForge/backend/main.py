@@ -869,6 +869,22 @@ async def get_3d_system_status():
         "gpu": "NVIDIA GeForce RTX 5070 Ti (16GB VRAM)"
     }
 
+class Save3DConfigRequest(BaseModel):
+    tripo3d_api_key: str = ""
+
+@app.post("/api/3d/config")
+async def save_3d_config(req: Save3DConfigRequest):
+    cfg_path = projects.BASE_DIR / "config.json"
+    data = {}
+    if cfg_path.exists():
+        try:
+            data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    data["tripo3d_api_key"] = req.tripo3d_api_key.strip()
+    cfg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"status": "ok", "tripo3d_configured": bool(data["tripo3d_api_key"])}
+
 @app.get("/api/3d/characters")
 async def list_3d_characters():
     saved = load_saved_characters()
@@ -952,6 +968,10 @@ async def poll_tripo3d_task(task_id: str, char_id: str = ""):
         prof["status"] = "MESH_READY"
         prof["mesh_file"] = f"/characters/assets/{char_id}/mesh.glb"
         character_3d_engine.save_character_3d_profile(char_id, prof)
+        try:
+            await character_3d_engine.create_blender_project(char_id)
+        except Exception as e:
+            logger.warning(f"Failed to auto-create Blender project for Tripo3D model: {e}")
 
     return task
 

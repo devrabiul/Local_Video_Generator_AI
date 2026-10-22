@@ -359,90 +359,177 @@ import os
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
 
-# 1. Create Base Humanoid Mesh
-# Head with UV Sphere
-bpy.ops.mesh.primitive_uv_sphere_add(radius=0.22, location=(0, 0, 1.62), segments=32, ring_count=24)
+# 1. High-Quality Anatomical Head with Sculpted Facial Features
+bpy.ops.mesh.primitive_uv_sphere_add(segments=48, ring_count=36, radius=0.20, location=(0, 0, 1.62))
 head = bpy.context.active_object
 head.name = "Character_Head"
 
-# Add Shape Keys for Lip-Sync
+# Deform vertices to create realistic human face geometry (jaw, chin, eye sockets, nose)
+mesh = head.data
+for v in mesh.vertices:
+    x, y, z = v.co.x, v.co.y, v.co.z
+    # Chin & Jaw taper
+    if z < 1.56 and y < 0:
+        factor = (1.56 - z) / 0.15
+        v.co.x *= (1.0 - factor * 0.35)
+        if abs(x) < 0.05 and z < 1.50:
+            v.co.y -= 0.02
+    # Eye sockets
+    dist_eye_l = math.sqrt((x - 0.065)**2 + (y + 0.14)**2 + (z - 1.64)**2)
+    dist_eye_r = math.sqrt((x + 0.065)**2 + (y + 0.14)**2 + (z - 1.64)**2)
+    if dist_eye_l < 0.05:
+        v.co.y += (0.05 - dist_eye_l) * 0.4
+    if dist_eye_r < 0.05:
+        v.co.y += (0.05 - dist_eye_r) * 0.4
+    # Nose protrusion
+    if abs(x) < 0.035 and 1.54 < z < 1.65 and y < -0.12:
+        dist_nose = math.sqrt(x**2 + (z - 1.59)**2)
+        if dist_nose < 0.05:
+            v.co.y -= (0.05 - dist_nose) * 0.65
+
+mesh.update()
+
+# Add Subsurf modifier for smooth organic human curves
+mod_sub = head.modifiers.new(name="Subsurf", type='SUBSURF')
+mod_sub.levels = 1
+mod_sub.render_levels = 2
+bpy.ops.object.shade_smooth()
+
+# Add ARKit Facial Shape Keys
 head.shape_key_add(name="Basis")
+
+# 1. Jaw Open with smooth falloff
 sk_jaw = head.shape_key_add(name="jawOpen")
 for v in sk_jaw.data:
-    if v.co.z < 1.60 and v.co.y < 0:
-        v.co.z -= 0.05
-        v.co.y += 0.01
+    if v.co.z < 1.58 and v.co.y < 0:
+        depth = min(1.0, (1.58 - v.co.z) / 0.12)
+        v.co.z -= 0.055 * depth
+        v.co.y += 0.015 * depth
 
+# 2. Mouth Smile
 sk_smile = head.shape_key_add(name="mouthSmile")
 for v in sk_smile.data:
-    if v.co.z < 1.62 and abs(v.co.x) > 0.05 and v.co.y < 0:
-        v.co.x *= 1.15
-        v.co.z += 0.02
+    if 1.50 < v.co.z < 1.58 and v.co.y < -0.10:
+        dist_center = abs(v.co.x)
+        if dist_center > 0.03:
+            v.co.x *= 1.18
+            v.co.z += 0.018 * min(1.0, dist_center / 0.08)
 
+# 3. Mouth Funnel (Pucker)
 sk_funnel = head.shape_key_add(name="mouthFunnel")
 for v in sk_funnel.data:
-    if v.co.z < 1.62 and abs(v.co.x) < 0.1 and v.co.y < 0:
-        v.co.y -= 0.04
+    if 1.50 < v.co.z < 1.58 and v.co.y < -0.10 and abs(v.co.x) < 0.07:
+        v.co.y -= 0.035
+        v.co.x *= 0.85
 
+# 4. Eyelid Blinks
 sk_blink_l = head.shape_key_add(name="eyeBlinkLeft")
+for v in sk_blink_l.data:
+    if 1.62 < v.co.z < 1.68 and v.co.x > 0.02 and v.co.y < -0.12:
+        v.co.z -= 0.025
+
 sk_blink_r = head.shape_key_add(name="eyeBlinkRight")
+for v in sk_blink_r.data:
+    if 1.62 < v.co.z < 1.68 and v.co.x < -0.02 and v.co.y < -0.12:
+        v.co.z -= 0.025
 
-# Torso (Body)
-bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, 0, 1.1))
-body = bpy.context.active_object
-body.name = "Character_Body"
-body.scale = (0.28, 0.18, 0.35)
-bpy.ops.object.transform_apply(scale=True)
-
-# Neck
-bpy.ops.mesh.primitive_cylinder_add(radius=0.08, depth=0.15, location=(0, 0, 1.45))
+# 2. Torso with Suit Jacket / Outfit Shape
+bpy.ops.mesh.primitive_cylinder_add(radius=0.08, depth=0.18, location=(0, 0, 1.45), vertices=24)
 neck = bpy.context.active_object
 neck.name = "Character_Neck"
+bpy.ops.object.shade_smooth()
 
-# Limbs
-def add_limb(name, loc, scale):
-    bpy.ops.mesh.primitive_cylinder_add(radius=0.06, depth=1.0, location=loc)
-    obj = bpy.context.active_object
-    obj.name = name
-    obj.scale = scale
+# Torso (Upper body: shoulders and chest)
+bpy.ops.mesh.primitive_cube_add(size=1.0, location=(0, 0, 1.15))
+torso = bpy.context.active_object
+torso.name = "Character_Torso"
+torso.scale = (0.34, 0.22, 0.42)
+bpy.ops.object.transform_apply(scale=True)
+
+# Taper waist & shape shoulders
+t_mesh = torso.data
+for v in t_mesh.vertices:
+    if v.co.z < 1.10:
+        v.co.x *= 0.82 # Waist taper
+        v.co.y *= 0.85
+    elif v.co.z > 1.30:
+        v.co.x *= 1.12 # Shoulder breadth
+t_mesh.update()
+
+mod_t_sub = torso.modifiers.new(name="Subsurf", type='SUBSURF')
+mod_t_sub.levels = 1
+bpy.ops.object.shade_smooth()
+
+# 3. Limbs (Arms and Legs with anatomical taper)
+def create_limb(name, start_loc, scale, taper=True):
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.065, depth=1.0, location=start_loc, vertices=20)
+    limb = bpy.context.active_object
+    limb.name = name
+    limb.scale = scale
     bpy.ops.object.transform_apply(scale=True)
-    return obj
+    if taper:
+        for v in limb.data.vertices:
+            factor = (1.0 - (v.co.z - start_loc[2])) / 2.0
+            v.co.x *= max(0.65, min(1.2, 1.1 - factor * 0.4))
+            v.co.y *= max(0.65, min(1.2, 1.1 - factor * 0.4))
+        limb.data.update()
+    bpy.ops.object.shade_smooth()
+    return limb
 
-add_limb("Arm_Left", (-0.38, 0, 1.05), (1.0, 1.0, 0.55))
-add_limb("Arm_Right", (0.38, 0, 1.05), (1.0, 1.0, 0.55))
-add_limb("Leg_Left", (-0.14, 0, 0.45), (1.1, 1.1, 0.85))
-add_limb("Leg_Right", (0.14, 0, 0.45), (1.1, 1.1, 0.85))
+arm_l = create_limb("Arm_Left", (-0.42, 0, 1.10), (1.0, 1.0, 0.58))
+arm_r = create_limb("Arm_Right", (0.42, 0, 1.10), (1.0, 1.0, 0.58))
+leg_l = create_limb("Leg_Left", (-0.15, 0, 0.46), (1.1, 1.1, 0.88))
+leg_r = create_limb("Leg_Right", (0.15, 0, 0.46), (1.1, 1.1, 0.88))
 
 # Join body parts
-body_parts = [body, neck, bpy.data.objects["Arm_Left"], bpy.data.objects["Arm_Right"], bpy.data.objects["Leg_Left"], bpy.data.objects["Leg_Right"]]
-for o in body_parts:
-    o.select_set(True)
-bpy.context.view_layer.objects.active = body
+body_parts = [torso, neck, arm_l, arm_r, leg_l, leg_r]
+for p in body_parts:
+    p.select_set(True)
+bpy.context.view_layer.objects.active = torso
 bpy.ops.object.join()
 
-# Material setup with Avatar texture if available
-mat_skin = bpy.data.materials.new(name="Material_Character")
-mat_skin.use_nodes = True
-nodes = mat_skin.node_tree.nodes
-bsdf = nodes.get("Principled BSDF")
-if bsdf:
-    bsdf.inputs["Base Color"].default_value = (0.82, 0.65, 0.52, 1.0)
-    bsdf.inputs["Roughness"].default_value = 0.4
+# 4. Realistic PBR Materials & Frontal Portrait UV Mapping
+# Head Skin Material
+mat_head = bpy.data.materials.new(name="Material_Head_Skin")
+mat_head.use_nodes = True
+nodes = mat_head.node_tree.nodes
+links = mat_head.node_tree.links
+nodes.clear()
 
-avatar_img_path = r"{avatar_str}"
-if avatar_img_path and os.path.exists(avatar_img_path):
+node_output = nodes.new(type="ShaderNodeOutputMaterial")
+node_bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
+links.new(node_bsdf.outputs["BSDF"], node_output.inputs["Surface"])
+
+node_bsdf.inputs["Base Color"].default_value = (0.85, 0.68, 0.56, 1.0)
+node_bsdf.inputs["Roughness"].default_value = 0.45
+
+avatar_path = r"{avatar_str}"
+if avatar_path and os.path.exists(avatar_path):
     try:
-        img = bpy.data.images.load(avatar_img_path)
-        tex_node = nodes.new(type="ShaderNodeTexImage")
-        tex_node.image = img
-        mat_skin.node_tree.links.new(tex_node.outputs["Color"], bsdf.inputs["Base Color"])
+        img = bpy.data.images.load(avatar_path)
+        node_tex = nodes.new(type="ShaderNodeTexImage")
+        node_tex.image = img
+        node_tex.extension = 'CLIP'
+        
+        node_coord = nodes.new(type="ShaderNodeTexCoord")
+        links.new(node_coord.outputs["Generated"], node_tex.inputs["Vector"])
+        links.new(node_tex.outputs["Color"], node_bsdf.inputs["Base Color"])
     except Exception as e:
-        print("Image texture link warning:", e)
+        print("Avatar texture setup warning:", e)
 
-head.data.materials.append(mat_skin)
-body.data.materials.append(mat_skin)
+head.data.materials.append(mat_head)
 
-# Create Humanoid Armature
+# Body Outfit Material (Dark Navy Suit)
+mat_outfit = bpy.data.materials.new(name="Material_Outfit")
+mat_outfit.use_nodes = True
+nodes_o = mat_outfit.node_tree.nodes
+bsdf_o = nodes_o.get("Principled BSDF")
+if bsdf_o:
+    bsdf_o.inputs["Base Color"].default_value = (0.12, 0.15, 0.22, 1.0)
+    bsdf_o.inputs["Roughness"].default_value = 0.65
+torso.data.materials.append(mat_outfit)
+
+# 5. Create Humanoid Armature with 9 Essential Bones
 bpy.ops.object.armature_add(location=(0, 0, 0))
 arm = bpy.context.active_object
 arm.name = "Character_Armature"
@@ -452,16 +539,16 @@ eb = arm.data.edit_bones
 
 root = eb[0]
 root.name = "Hips"
-root.head = (0, 0, 0.9)
-root.tail = (0, 0, 1.1)
+root.head = (0, 0, 0.90)
+root.tail = (0, 0, 1.10)
 
 spine = eb.new("Spine")
-spine.head = (0, 0, 1.1)
-spine.tail = (0, 0, 1.3)
+spine.head = (0, 0, 1.10)
+spine.tail = (0, 0, 1.30)
 spine.parent = root
 
 chest = eb.new("Chest")
-chest.head = (0, 0, 1.3)
+chest.head = (0, 0, 1.30)
 chest.tail = (0, 0, 1.45)
 chest.parent = spine
 
@@ -475,37 +562,34 @@ head_b.head = (0, 0, 1.55)
 head_b.tail = (0, 0, 1.85)
 head_b.parent = neck_b
 
-arm_l = eb.new("LeftUpperArm")
-arm_l.head = (-0.2, 0, 1.38)
-arm_l.tail = (-0.45, 0, 1.0)
-arm_l.parent = chest
+arm_l_b = eb.new("LeftUpperArm")
+arm_l_b.head = (-0.22, 0, 1.40)
+arm_l_b.tail = (-0.48, 0, 1.05)
+arm_l_b.parent = chest
 
-arm_r = eb.new("RightUpperArm")
-arm_r.head = (0.2, 0, 1.38)
-arm_r.tail = (0.45, 0, 1.0)
-arm_r.parent = chest
+arm_r_b = eb.new("RightUpperArm")
+arm_r_b.head = (0.22, 0, 1.40)
+arm_r_b.tail = (0.48, 0, 1.05)
+arm_r_b.parent = chest
 
-leg_l = eb.new("LeftUpperLeg")
-leg_l.head = (-0.14, 0, 0.9)
-leg_l.tail = (-0.14, 0, 0.05)
-leg_l.parent = root
+leg_l_b = eb.new("LeftUpperLeg")
+leg_l_b.head = (-0.15, 0, 0.90)
+leg_l_b.tail = (-0.15, 0, 0.05)
+leg_l_b.parent = root
 
-leg_r = eb.new("RightUpperLeg")
-leg_r.head = (0.14, 0, 0.9)
-leg_r.tail = (0.14, 0, 0.05)
-leg_r.parent = root
+leg_r_b = eb.new("RightUpperLeg")
+leg_r_b.head = (0.15, 0, 0.90)
+leg_r_b.tail = (0.15, 0, 0.05)
+leg_r_b.parent = root
 
 bpy.ops.object.mode_set(mode='OBJECT')
 
-body.select_set(True)
+# Parent Head & Torso to Armature with Automatic Weights
+head.select_set(True)
+torso.select_set(True)
 arm.select_set(True)
 bpy.context.view_layer.objects.active = arm
 bpy.ops.object.parent_set(type='ARMATURE_AUTO')
-
-head.select_set(True)
-arm.select_set(True)
-bpy.context.view_layer.objects.active = arm
-bpy.ops.object.parent_set(type='BONE')
 
 # Add 3-point Studio Lighting
 key_data = bpy.data.lights.new(name="Key_Light", type='AREA')
