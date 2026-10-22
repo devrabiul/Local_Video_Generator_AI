@@ -23,6 +23,8 @@ import model_catalog
 import music_library
 import projects
 import tts_engine
+import character_3d_engine
+from tripo3d_provider import Tripo3DProvider, get_tripo3d_api_key
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = projects.OUTPUT_DIR
@@ -684,8 +686,10 @@ async def upload_character_image(
 # =========================================================================
 CHARACTERS_VAULT_DIR = projects.BASE_DIR / "characters"
 CHARACTERS_AVATARS_DIR = CHARACTERS_VAULT_DIR / "avatars"
+CHARACTERS_ASSETS_DIR = CHARACTERS_VAULT_DIR / "assets"
 CHARACTERS_JSON_PATH = CHARACTERS_VAULT_DIR / "characters.json"
 CHARACTERS_AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+CHARACTERS_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 if not CHARACTERS_JSON_PATH.exists():
     CHARACTERS_JSON_PATH.write_text("[]", encoding="utf-8")
 
@@ -788,9 +792,266 @@ async def delete_saved_character(char_id: str):
         fname = target["avatar_url"].split("/")[-1]
         (CHARACTERS_AVATARS_DIR / fname).unlink(missing_ok=True)
 
+    # Clean up persistent 3D assets folder
+    asset_dir = CHARACTERS_ASSETS_DIR / char_id
+    if asset_dir.exists():
+        shutil.rmtree(asset_dir, ignore_errors=True)
+
     chars = [c for c in chars if c.get("id") != char_id]
     save_saved_characters(chars)
     return {"status": "ok", "deleted_id": char_id}
+
+@app.delete("/api/3d/characters/{char_id}")
+async def delete_3d_character(char_id: str):
+    """Deletes character completely from vault and removes all persistent 3D assets."""
+    chars = load_saved_characters()
+    target = next((c for c in chars if c.get("id") == char_id), None)
+    if target:
+        if target.get("avatar_url", "").startswith("/characters/avatars/"):
+            fname = target["avatar_url"].split("/")[-1]
+            (CHARACTERS_AVATARS_DIR / fname).unlink(missing_ok=True)
+        chars = [c for c in chars if c.get("id") != char_id]
+        save_saved_characters(chars)
+    
+    asset_dir = CHARACTERS_ASSETS_DIR / char_id
+    if asset_dir.exists():
+        shutil.rmtree(asset_dir, ignore_errors=True)
+    
+    return {"status": "ok", "deleted_character_id": char_id}
+
+@app.delete("/api/3d/characters/{char_id}/assets")
+async def reset_3d_character_assets(char_id: str):
+    """Resets/cleans generated 3D files while keeping reference image and vault profile."""
+    asset_dir = CHARACTERS_ASSETS_DIR / char_id
+    if asset_dir.exists():
+        for filename in ["mesh.glb", "rigged.glb", "character.blend", "profile.json"]:
+            (asset_dir / filename).unlink(missing_ok=True)
+    # Re-initialize fresh clean profile
+    prof = character_3d_engine.load_character_3d_profile(char_id)
+    return {"status": "ok", "profile": prof}
+
+@app.delete("/api/3d/characters/{char_id}/renders/{video_filename}")
+async def delete_3d_rendered_video(char_id: str, video_filename: str):
+    """Deletes a specific rendered scene video file."""
+    video_path = CHARACTERS_ASSETS_DIR / char_id / "renders" / video_filename
+    if video_path.exists():
+        video_path.unlink(missing_ok=True)
+        return {"status": "ok", "deleted": video_filename}
+    raise HTTPException(status_code=404, detail="Rendered video not found")
+
+# =========================================================================
+# Persistent 3D Character Animation System Endpoints
+# =========================================================================
+
+class Render3DSceneRequest(BaseModel):
+    character_id: str
+    scene_id: int = 1
+    animation: str = "walk"
+    camera_mode: str = "medium"
+    lighting_preset: str = "studio"
+    duration: float = 4.0
+    dialogue: str = ""
+    voice: str = "Charon"
+    tts_engine: str = "gemini"
+    language: str = "bn"
+    aspect_ratio: str = "9:16"
+
+@app.get("/api/3d/status")
+async def get_3d_system_status():
+    blender_bin = character_3d_engine.find_blender_binary()
+    tripo_key = get_tripo3d_api_key()
+    return {
+        "blender_installed": bool(blender_bin),
+        "blender_path": blender_bin,
+        "tripo3d_configured": bool(tripo_key),
+        "animation_presets": character_3d_engine.ANIMATION_PRESETS,
+        "blendshape_targets": character_3d_engine.ARKit_FACIAL_BLENDSHAPES,
+        "gpu": "NVIDIA GeForce RTX 5070 Ti (16GB VRAM)"
+    }
+
+@app.get("/api/3d/characters")
+async def list_3d_characters():
+    saved = load_saved_characters()
+    result = []
+    for c in saved:
+        cid = c.get("id")
+        if not cid:
+            continue
+        prof = character_3d_engine.load_character_3d_profile(cid)
+        prof["name"] = c.get("name", prof.get("name", ""))
+        prof["avatar_url"] = c.get("avatar_url", "")
+        prof["look"] = c.get("look", "")
+        result.append(prof)
+    return result
+
+@app.get("/api/3d/characters/{char_id}")
+async def get_3d_character_profile(char_id: str):
+    saved = load_saved_characters()
+    char_info = next((c for c in saved if c.get("id") == char_id), None)
+    prof = character_3d_engine.load_character_3d_profile(char_id)
+    if char_info:
+        prof["name"] = char_info.get("name", "")
+        prof["avatar_url"] = char_info.get("avatar_url", "")
+        prof["look"] = char_info.get("look", "")
+    return prof
+
+@app.post("/api/3d/characters/{char_id}/generate-local")
+async def generate_local_3d_character(char_id: str):
+    saved = load_saved_characters()
+    char_info = next((c for c in saved if c.get("id") == char_id), None)
+    avatar_path = None
+    if char_info and char_info.get("avatar_url"):
+        raw_url = char_info["avatar_url"].lstrip("/")
+        candidate = projects.BASE_DIR / raw_url
+        if candidate.exists():
+            avatar_path = candidate
+
+    try:
+        prof = await character_3d_engine.generate_local_rigged_character(char_id, avatar_path)
+        if char_info:
+            prof["name"] = char_info.get("name", "")
+            prof["avatar_url"] = char_info.get("avatar_url", "")
+        return {"status": "SUCCESS", "profile": prof}
+    except Exception as e:
+        logger.error(f"Local 3D character generation failed for {char_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/3d/characters/{char_id}/generate-tripo3d")
+async def generate_tripo3d_character(char_id: str):
+    tripo = Tripo3DProvider()
+    if not tripo.is_configured():
+        raise HTTPException(status_code=400, detail="Tripo3D API key is not configured. Add 'tripo3d_api_key' to config.json or use local Blender generation.")
+
+    saved = load_saved_characters()
+    char_info = next((c for c in saved if c.get("id") == char_id), None)
+    if not char_info or not char_info.get("avatar_url"):
+        raise HTTPException(status_code=400, detail="Character has no reference avatar photo.")
+
+    raw_url = char_info["avatar_url"].lstrip("/")
+    avatar_path = projects.BASE_DIR / raw_url
+    if not avatar_path.exists():
+        raise HTTPException(status_code=400, detail=f"Avatar photo not found at {avatar_path}")
+
+    try:
+        task_info = await tripo.generate_mesh(avatar_path, prompt=char_info.get("look", ""))
+        return {"status": "QUEUED", "task": task_info}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/3d/tripo3d/task/{task_id}")
+async def poll_tripo3d_task(task_id: str, char_id: str = ""):
+    tripo = Tripo3DProvider()
+    task = await tripo.poll_task(task_id)
+
+    # If completed and char_id provided, download model to asset profile
+    if task.get("status") == "SUCCESS" and task.get("model_url") and char_id:
+        char_dir = character_3d_engine.get_character_asset_dir(char_id)
+        mesh_path = char_dir / "mesh.glb"
+        await tripo.download_asset(task["model_url"], mesh_path)
+        prof = character_3d_engine.load_character_3d_profile(char_id)
+        prof["status"] = "MESH_READY"
+        prof["mesh_file"] = f"/characters/assets/{char_id}/mesh.glb"
+        character_3d_engine.save_character_3d_profile(char_id, prof)
+
+    return task
+
+@app.post("/api/3d/characters/{char_id}/import-model")
+async def import_character_model(
+    char_id: str,
+    file: UploadFile = File(...),
+    is_rigged: bool = Form(False)
+):
+    char_dir = character_3d_engine.get_character_asset_dir(char_id)
+    suffix = Path(file.filename or "model.glb").suffix.lower()
+    
+    if suffix in (".glb", ".gltf"):
+        dest_name = "rigged.glb" if is_rigged else "mesh.glb"
+    elif suffix == ".fbx":
+        dest_name = "model.fbx"
+    elif suffix == ".blend":
+        dest_name = "character.blend"
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported 3D file format. Use .glb, .fbx, or .blend.")
+
+    dest_path = char_dir / dest_name
+    content = await file.read()
+    dest_path.write_bytes(content)
+
+    prof = character_3d_engine.load_character_3d_profile(char_id)
+    if dest_name == "character.blend":
+        prof["status"] = "BLENDER_PROJECT_READY"
+        prof["blend_file"] = f"/characters/assets/{char_id}/character.blend"
+    elif is_rigged:
+        prof["status"] = "RIGGED"
+        prof["rigged_file"] = f"/characters/assets/{char_id}/rigged.glb"
+    else:
+        prof["status"] = "MESH_READY"
+        prof["mesh_file"] = f"/characters/assets/{char_id}/mesh.glb"
+
+    character_3d_engine.save_character_3d_profile(char_id, prof)
+    return {"status": "SUCCESS", "imported_file": dest_name, "profile": prof}
+
+@app.post("/api/3d/characters/{char_id}/create-blend")
+async def create_character_blend(char_id: str):
+    try:
+        prof = await character_3d_engine.create_blender_project(char_id)
+        return {"status": "SUCCESS", "profile": prof}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/3d/render-scene")
+async def render_3d_character_scene(req: Render3DSceneRequest):
+    char_dir = character_3d_engine.get_character_asset_dir(req.character_id)
+    audio_path = None
+
+    # Step 1: Voiceover & Speech Lip-Sync Audio Generation
+    if req.dialogue.strip():
+        renders_dir = char_dir / "renders"
+        renders_dir.mkdir(parents=True, exist_ok=True)
+        raw_audio = renders_dir / f"scene_{req.scene_id}_speech.wav"
+        try:
+            voice_id = req.voice if ":" in req.voice else f"{req.tts_engine}:{req.voice}"
+            await tts_engine.generate_voiceover(
+                text=req.dialogue.strip(),
+                voice=voice_id,
+                output_path=raw_audio,
+                language=req.language
+            )
+            if raw_audio.exists():
+                audio_path = raw_audio
+                # Auto-calculate duration from generated audio
+                dur = await asyncio.to_thread(ai_engine.get_audio_duration, raw_audio)
+                if dur > 0.5:
+                    req.duration = round(dur, 2)
+        except Exception as e:
+            logger.warning(f"Could not generate dialogue voiceover: {e}; rendering with silent animation")
+
+    # Step 2: Deterministic 3D Blender Animation Rendering
+    try:
+        out_video = await character_3d_engine.render_scene_3d(
+            char_id=req.character_id,
+            scene_id=req.scene_id,
+            animation=req.animation,
+            camera_mode=req.camera_mode,
+            lighting_preset=req.lighting_preset,
+            audio_path=audio_path,
+            duration=req.duration,
+            aspect_ratio=req.aspect_ratio
+        )
+        video_url = f"/characters/assets/{req.character_id}/renders/{out_video.name}"
+        return {
+            "status": "DONE",
+            "video_url": video_url,
+            "scene_id": req.scene_id,
+            "character_id": req.character_id,
+            "duration": req.duration,
+            "animation": req.animation,
+            "camera_mode": req.camera_mode,
+            "lighting_preset": req.lighting_preset
+        }
+    except Exception as e:
+        logger.error(f"3D Scene render failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
 app.mount("/jobs", StaticFiles(directory=str(JOBS_DIR)), name="jobs")

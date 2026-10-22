@@ -1,11 +1,11 @@
 [
   {
-    "id": "char_66aee319",
-    "name": "রবিউল",
-    "look": "Unmistakable facial likeness of রবিউল rendered in next-gen Pixar/Disney style 3D CGI. Features include warm olive skin tone with realistic subsurface scattering and freckling detail, volumetric black hair with dynamic strands, expressive eyes reflecting environment lighting, and a mouth rig capable of nuanced smiles. The character design emphasizes warmth, clarity, and the unique facial structure associated with রবিউল.",
-    "features_summary": "A young South Asian male with a warm complexion, dark textured hair, expressive brown eyes, and a friendly approachable demeanor rendered in high-fidelity 3D animation.",
-    "avatar_url": "/characters/avatars/char_66aee319.jpg",
-    "voice_preset": "",
-    "created_at": "2026-10-21T23:27:01Z"
+    "id": "char_38f853ba",
+    "name": "Rabiul",
+    "look": "A 3D CGI character modeled in the signature Pixar/Disney aesthetic with high-quality subsurface scattering on the warm skin tone to capture lighting nuances realistically. The face uses smooth topology for soft deformations around the eyes and mouth during animation. Hair is rendered with strand-based simulation for a fluffy, realistic texture that interacts with light. Eyes are glossy and reflective, conveying deep emotion through iris movement. Outfit consists of casual streetwear fitting the modern protagonist archetype, ensuring the character is distinct in any scene.",
+    "features_summary": "Young adult male with warm brown skin tone, neatly styled black hair with a slight side part, expressive dark eyes, and a well-defined but approachable jawline typical of a stylized Pixar protagonist.",
+    "avatar_url": "/characters/avatars/char_38f853ba.png",
+    "voice_preset": "Charon",
+    "created_at": "2026-10-22T00:56:40Z"
   }
 ]

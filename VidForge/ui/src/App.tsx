@@ -6,13 +6,14 @@ import {
   Plus, ArrowRight, BookOpen, Bot, Cpu, AlertTriangle,
   MessageSquare, Send, User, Key, Zap, ExternalLink, Mic, Upload, Settings, X, Sun, Moon,
   Newspaper, Presentation, GraduationCap, Megaphone, Clapperboard, Camera, UserRound, Flame,
-  Plane, Rabbit, Search, Music, FolderOpen, Image as ImageIcon, PartyPopper, Boxes, Subtitles, Workflow, FileText, HelpCircle, Bookmark, Save, type LucideIcon
+  Plane, Rabbit, Search, Music, FolderOpen, Image as ImageIcon, PartyPopper, Boxes, Subtitles, Workflow, FileText, HelpCircle, Bookmark, Save, Box, type LucideIcon
 } from 'lucide-react';
 import ModelsPage from './ModelsPage';
 import BackgroundMusicPicker, { DEFAULT_MUSIC_SETTINGS, type MusicSettings, type MusicTrack } from './BackgroundMusicPicker';
 import ThumbnailStudio from './ThumbnailStudio';
 import ProjectReviseDialog from './ProjectReviseDialog';
 import WorkflowPage from './WorkflowPage';
+import Persistent3DCharactersPage from './Persistent3DCharactersPage';
 import { toast, Toaster } from './Toast';
 import { LoadMeter, LoadDot, optionLoad } from './LoadMeter';
 
@@ -426,7 +427,7 @@ const PERSONA_PROMPTS: Record<string, string> = {
   general: "You are a helpful, creative, and friendly AI assistant powered by Ollama."
 };
 
-type TabId = "production" | "chat" | "ollama" | "voices" | "gallery" | "models" | "workflow";
+type TabId = "production" | "chat" | "ollama" | "voices" | "gallery" | "models" | "workflow" | "characters3d";
 
 // ?tab= slug for each tab, so a reload or shared link opens the same tab
 const TAB_SLUGS: Record<TabId, string> = {
@@ -437,6 +438,7 @@ const TAB_SLUGS: Record<TabId, string> = {
   gallery: "projects",
   models: "ai-models",
   workflow: "how-it-works",
+  characters3d: "persistent-3d-characters",
 };
 
 const tabFromUrl = (): TabId => {
@@ -1696,9 +1698,10 @@ export default function App() {
           { id: 'gallery', label: 'Projects', meta: `${jobs.length} saved · ${completedJobs.length} ready`, Icon: FolderOpen },
           { id: 'models', label: 'AI Models & Hardware', meta: 'Downloads, sizes, requirements', Icon: Boxes },
           { id: 'workflow', label: 'About & How It Works', meta: 'Author, about VidForge, pipeline', Icon: Workflow },
+          { id: 'characters3d', label: 'Persistent 3D Characters', meta: '3D Rigs, Walking, Speaking & Blender', Icon: Box },
         ] as const).map(({ id, label, meta, Icon }, i) => (
           <Fragment key={id}>
-            {(i === 4 || i === 5) && <span className="floating-dock-divider" aria-hidden="true" />}
+            {(i === 4 || i === 5 || i === 7) && <span className="floating-dock-divider" aria-hidden="true" />}
             <button
               type="button"
               className={`floating-tab-btn ${activeTab === id ? 'active' : ''}`}
@@ -4117,6 +4120,10 @@ Visual: An iron axe splashing into deep river water, dramatic camera.`}
 
         <div className={`tab-pane ${activeTab === 'workflow' ? 'active' : ''}`}>
           <WorkflowPage />
+        </div>
+
+        <div className={`tab-pane ${activeTab === 'characters3d' ? 'active' : ''}`}>
+          <Persistent3DCharactersPage apiBase={API_BASE} active={activeTab === 'characters3d'} />
         </div>
 
       </main>
